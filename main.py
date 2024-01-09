@@ -1,0 +1,331 @@
+import os
+from copy import deepcopy
+import logging
+import json
+import string
+import numpy as np
+import pandas as pd
+import openai
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+from dotenv import load_dotenv
+load_dotenv()
+openai.api_key = os.getenv('OPENAI_API_KEY')
+openai.organization = os.getenv('OPENAI_ORGANIZATION')
+
+"""
+Function calling hierarchy:
+main() calls run_game() multiple times in parallel and initializes objects of class Policy
+run_game() calls run_round() and update_results()
+run_round() calls query_policy() from object of class Policy
+query_policy() calls get_response_openai()
+get_response_openai() uses get_prompts()
+get_prompts() requires matrix_to_str() and results_to_history_str()
+"""
+
+class Policy:
+	def __init__(self, model, player_name, opponent_name, role, persona, strategic_reasoning, show_past_reasoning=False):
+		self.player_name = player_name
+		self.opponent_name = opponent_name
+		self.role = role
+		self.persona = persona
+		self.strategic_reasoning = strategic_reasoning
+		self.model = model
+		self.show_past_reasoning = show_past_reasoning
+		self.most_recent_action = None
+
+	def query_policy(self, history_str, message_round, labels_row, labels_column, end_prob, matrix, total_message_rounds, **kwargs):
+		output = get_response_openai(self.player_name, self.opponent_name, self.role, end_prob, history_str, matrix, 
+                               			labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=self.strategic_reasoning,
+										model=self.model, persona=self.persona, **kwargs)
+		self.most_recent_action = output['action']
+		return output
+
+def always_defect(player_name, opponent_name, end_prob, results):
+	answer = '{"reasoning": "", "action": "D"}'
+	return answer
+
+def get_strategic_reasoning_prompt(examples_to_include=('simultaneous_22')):
+	files = os.listdir('./prompts/strategic_reasoning')
+	prompt = 'Below are examples of strategic reasoning from other games. You should use similar reasoning patterns in making your own decision.'
+	for fname in files:
+		if fname in examples_to_include:
+			with open(os.path.join('./prompts/strategic_reasoning', fname)) as f:
+				text = f.read()
+			prompt += f'\n{text}'
+	return prompt
+
+def results_to_history_str(results, names_tuple, current_round_messages=None, messages=False):
+	history_str = ''
+	n_rounds = len(results['time-steps'])
+	player_a, player_b = names_tuple[0], names_tuple[1]
+
+	if messages:
+		# Summaries of previous rounds
+		for i in range(n_rounds):
+			summary_of_round = f'\nTime-step {i+1}\nMessages'
+			messages_round = results['time-steps'][i]['messages']
+			# ToDo: need to change if we want to collect all messages and reasoning in results
+			for message in messages_round:
+				speaker = message['speaker']
+				message_content = message['message']
+				summary_of_round += f'\n{speaker}: {message_content}'
+			player_a_action = results['time-steps'][i][f'{player_a}_output'][-1]['action']
+			player_b_action = results['time-steps'][i][f'{player_b}_output'][-1]['action']
+			summary_of_round += f'\nActions\n{player_a_action},{player_b_action}'
+			history_str += summary_of_round
+		# This round's messages
+		history_str += f'\nCurrent time-step messages'
+		if current_round_messages:
+			for message in current_round_messages:
+				speaker = message['speaker']
+				message_content = message['message']
+				history_str += f'\n{speaker}: {message_content}'
+		else:
+			history_str += '\nThis is the first message round for this time-step.'
+	else:
+		for i in range(n_rounds):
+			player_a_action = results['time-steps'][i][f'{player_a}_output']['action']
+			player_b_action = results['time-steps'][i][f'{player_b}_output']['action']
+			history_str += f"\n{player_a_action},{player_b_action}"
+	return history_str
+
+def matrix_to_str(matrix, labels_row, labels_column, player_name, opponent_name, role):
+	if role == 'row':
+		row = player_name
+		column = opponent_name
+	elif role == 'column':
+		row = opponent_name
+		column = player_name
+
+	m, n = len(matrix), len(matrix[0])
+	matrix_str = ''
+	for i in range(m):
+		row_label = labels_row[i]
+		for j in range(n):
+			column_label = labels_column[j]
+			u_row = matrix[i][j][0]
+			u_column = matrix[i][j][1]
+			outcome_str = f'\nIf {row} plays {row_label} and {column} plays {column_label}, then {row} gets {u_row} and {column} gets {u_column}.'
+			matrix_str += outcome_str
+	return matrix_str
+
+def get_past_reasoning():
+	pass
+
+# Constructs prompts from the CSV and TXT files
+def get_prompts(player_name, opponent_name, role, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning, persona):
+	if strategic_reasoning:
+		strategic_reasoning_prompt = get_strategic_reasoning_prompt()
+	else:
+		strategic_reasoning_prompt = ''
+	
+		if persona == "fair":
+				pass
+		elif persona == "exploiter":
+				pass
+		elif persona == "vanilla":
+				pass
+	
+	if role == "row":
+		labels = labels_row
+		row, column = player_name, opponent_name
+	elif role == "column":
+		labels = labels_column
+		row, column = opponent_name, player_name
+
+	matrix_str = matrix_to_str(matrix, labels_row, labels_column, player_name, opponent_name, role)
+	intro_context = "You are an expert in game theory, playing an iterated matrix game."
+	add_context = 'You have a strong commitment to fairness, and exhibit this in your reasoning, messages, and actions.'
+	output_schema = """{{"reasoning": This is a string of up to 500 words of reasoning about what messages you should send and what action you should choose. You should consider the history of play thus far, and what the other player is saying, and think step-by-step about the best thing to do, keeping in mind your commitment to fairness. If there are message rounds left, your reasoning should end with: "Therefore, I will say <summary of message to {opponent_name}>." If it is the last message round, or there are no message rounds left, you should say: "Therefore, my action will be <intended action>.", "message": <A message to the other player. Note that this will not be sent if there are no message rounds left.>, "action": <A string in {labels}. This is the action that you would take (if it isn't the final message round) or the action that you will in fact take (if it is the final message round).>}}"""
+ 
+	system = f'{intro_context} Your name is {player_name}, and the agent you are playing against is named {opponent_name}. At each time-step, you and {opponent_name} will exchange messages. Three messages in total will be exchanged, with the first speaker being chosen at random at each time-step. At each time-step, you and {opponent_name} will simultaneously choose your actions; the available actions are labeled {",".join(labels)}. The game has a {end_prob}\% chance of ending after every time-step. Here is the payoff matrix:\n{matrix_str}.\n\nBefore each time-step, you will be shown a summary of the history of play thus far. {add_context} You should return a JSON with the following format (key names should be in double quotes; you must always fill out every field):\n\n{output_schema}'
+ 
+	if message_round > total_message_rounds:
+		final_message_round = "There are no more message rounds."
+	elif message_round in (total_message_rounds-1, total_message_rounds):
+		final_message_round = f"It is message round {message_round} of {total_message_rounds}. This is your last chance to send a message."
+	else:
+		final_message_round = f"It is message_round {message_round} of {total_message_rounds}."
+	user = f"Here is a summary of the history of play thus far, in the order ({row}, {column}): {history_str}.\n\n{final_message_round} Now please output a correctly-formatted JSON:"
+	return system, user
+
+# Sends request and gets JSON response from the OpenAI API. In the future, we may want to add get_response_anthropic etc.
+def get_response_openai(player_name, opponent_name, role, end_prob, history_str, 
+                        matrix, labels_row, labels_column, message_round=None,
+						total_message_rounds=None, strategic_reasoning=False, 
+      					model='gpt-4-32k', persona="vanilla", **kwargs):
+    
+	system, user = get_prompts(player_name, opponent_name, role, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=strategic_reasoning, persona=persona)
+	max_retries = 5
+	retry_interval_sec = 20
+	answer_dict = {}
+	for _ in range(max_retries):
+		try:
+			completion = openai.ChatCompletion.create(model=model, messages=[{'role': 'system', 'content': system, },
+																			{'role': 'user', 'content': user}],
+																			max_tokens=800, temperature=1.0, **kwargs)
+			# Not valid JSON if there are too many tokens and it gets cut off
+			if completion.choices[0]['finish_reason'] != "stop":
+				raise Exception("Completion error: finish_reason is not stop")
+			answer = completion['choices'][0]['message']['content']
+			answer_dict = json.loads(answer)
+			break
+		except (
+			openai.error.RateLimitError,
+			openai.error.ServiceUnavailableError,
+			openai.error.APIError,
+			openai.error.APIConnectionError,
+			openai.error.Timeout,
+			openai.error.TryAgain,
+			openai.error.OpenAIError,) as e:
+			logging.exception(e)
+			time.sleep(retry_interval_sec)
+		except Exception as e:
+			logging.exception(e)
+			time.sleep(retry_interval_sec)
+	
+	if not answer_dict:
+		# If it does not succeed after multiple retries, consider this a failed game and log it
+		#print('Failed to get response from OpenAI API')
+		logging.error('Failed to get response from OpenAI API')
+ 
+	return answer_dict
+
+def run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, current_round_messages, end_prob, total_message_rounds):
+	# Randomly choose who speaks first, then create tuple of speaker indices that alternate
+	first_speaker_index = np.random.choice(2)
+	speaker_indices = (lambda n, x: tuple(x if i % 2 == 0 else 1 - x for i in range(n)))(total_message_rounds, first_speaker_index)	
+	
+	# Conduct message exchange and get final action from player who sends the final message
+	results_dict_i = {f"{names_tuple[0]}_output": [], f"{names_tuple[1]}_output": [], "messages": None}
+	current_round_messages = []
+
+	for ix, speaker_index in enumerate(speaker_indices):
+		speaker, non_speaker = names_tuple[speaker_index], names_tuple[1-speaker_index]
+		policy = policy_dict[speaker]
+		history_str = results_to_history_str(results_dict, names_tuple, current_round_messages)
+		output = policy.query_policy(history_str, ix+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
+		output_dict = output
+		current_round_messages.append({'speaker': speaker, 'message': output_dict['message']})
+		results_dict_i[f"{speaker}_output"].append(output_dict)
+
+		if ix == 0:
+			player_a_output = output_dict
+		else:
+			player_b_output = output_dict
+   
+	# In the case where no messages are exchanged, both players only select actions (to avoid messages, message_round is made > total_message_rounds).
+	if total_message_rounds == 0:
+		speaker_index = first_speaker_index
+		speaker, non_speaker = names_tuple[speaker_index], names_tuple[1-speaker_index]
+		policy = policy_dict[speaker]
+		history_str = results_to_history_str(results_dict, names_tuple, current_round_messages)
+		output = policy.query_policy(history_str, total_message_rounds+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
+		output_dict = output
+		current_round_messages.append({'speaker': speaker, 'message': output_dict['message']})
+		results_dict_i[f"{speaker}_output"].append(output_dict)
+ 
+	# Get final action from the player who didn't get to send the final message (if there are message rounds) and the second player (if there are no message rounds)
+	last_index = 1 - speaker_index
+	speaker, non_speaker = names_tuple[last_index], names_tuple[1-last_index]
+	policy = policy_dict[speaker]
+	history_str = results_to_history_str(results_dict, names_tuple, current_round_messages)
+	output = policy.query_policy(history_str, total_message_rounds + 1, labels_row, labels_column, end_prob, matrix, total_message_rounds)
+	results_dict_i[f"{speaker}_output"].append(output)
+
+	return results_dict_i, current_round_messages
+
+def update_results(results_dict, results_dict_i, current_round_messages, i, policy_dict, payoff_dict, names_tuple):
+    """
+    After this function, results_dict will look like:
+    {'summary': {'player_a_total_utility': 0.0, 'player_b_total_utility': 0.0, 'player_a_avg_utility': 0.0, 'player_b_avg_utility': 0.0},
+    'time-steps': {0: {'Alice_output': [{'reasoning': '...', 'action': 'C'}, {'reasoning': '...', 'action': 'C'}], 'Bob_output': [{'reasoning': '...', 'action': 'D'}], 'messages': [{'speaker': 'Alice', 'message': '...'}, {'speaker': 'Bob', 'message': '...'}]},
+    {1: {'Alice_output': [{'reasoning': '...', 'action': 'C'}, {'reasoning': '...', 'action': 'C'}], 'Bob_output': [{'reasoning': '...', 'action': 'D'}], 'messages': [{'speaker': 'Alice', 'message': '...'}, {'speaker': 'Bob', 'message': '...'}]},
+    }
+    """
+    player_a_action = policy_dict[names_tuple[0]].most_recent_action
+    player_b_action = policy_dict[names_tuple[1]].most_recent_action
+    
+    player_a_payoff, player_b_payoff = payoff_dict[f'{player_a_action},{player_b_action}']
+    results_dict['summary']['player_a_total_utility'] += player_a_payoff
+    results_dict['summary']['player_b_total_utility'] += player_b_payoff
+    results_dict['summary']['player_a_avg_utility'] = results_dict['summary']['player_a_total_utility'] / (i+1)
+    results_dict['summary']['player_b_avg_utility'] = results_dict['summary']['player_b_total_utility'] / (i+1)
+    
+    results_dict_i['messages'] = current_round_messages
+    results_dict['time-steps'][i] = results_dict_i
+    
+    return results_dict
+
+def run_game(player_a_policy, player_b_policy, end_prob, fname, matrix, max_game_rounds=20, total_message_rounds=1):
+	# Make deep copies of policies
+	player_a_policy = deepcopy(player_a_policy)
+	player_b_policy = deepcopy(player_b_policy)
+	
+	# Initialize values and dictionaries to store results and values
+	results_dict = {'summary': {}, 'time-steps': {}}
+	results_dict['summary']['player_a_total_utility'] = 0.
+	results_dict['summary']['player_b_total_utility'] = 0.
+	policy_dict = {player_a_policy.player_name: player_a_policy, 
+					player_a_policy.player_name: player_b_policy}
+	names_tuple = (player_a_policy.player_name, player_b_policy.player_name)
+
+	# Check if runs-{today_date} directory exists, if not, create it
+	today_date = time.strftime("%Y-%m-%d")
+	output_dir = f"results/runs-{today_date}"
+	if not os.path.exists(output_dir):
+		os.makedirs(output_dir)
+	
+	# Labels and payoffs
+	m, n = len(matrix), len(matrix[0])
+	if m > 26 or n > 26:
+		raise ValueError('Matrix is too large to label with the alphabet')
+	alphabet = string.ascii_uppercase
+	labels_row, labels_column = [alphabet[i] for i in range(len(matrix))], [alphabet[j] for j in range(len(matrix[0]))]
+	payoff_dict = {f'{labels_row[i]},{labels_column[j]}': matrix[i][j] for j in range(n) for i in range(m)}
+	
+	# Run rounds until game ends
+	round_num = 0
+	while round_num < max_game_rounds:
+		if np.random.random() < end_prob:
+			break
+		else:
+			results_dict_i, current_round_messages = run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, current_round_messages, end_prob, total_message_rounds)
+			results_dict = update_results(results_dict, results_dict_i, current_round_messages, round_num, policy_dict, payoff_dict, names_tuple)
+			json.dump(results_dict, open(f"{output_dir}/{fname}.json", "w"))
+			round_num += 1
+	return results_dict
+
+def main():	
+	### Matrix for Bach or Stravinsky
+	matrix = [[(10,5), (0, 0)],
+			[(0,0), (5, 10)]]
+	### Modify matrix to suit needs
+	
+	# Parameters
+	end_prob = 0.001
+	num_games = 5
+	max_game_rounds = 16
+	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
+	player_a_strategic_reasoning = True
+	player_b_strategic_reasoning = True
+	model = 'gpt-4-1106-preview' #gpt-4 or #gpt-4-1106-preview
+	player_a_persona = 'vanilla'
+	player_b_persona = 'vanilla'
+	output_fname = f"vanilla-symmetric-bos-16-turns"
+	show_past_reasoning_player_a = False
+	show_past_reasoning_player_b = False
+
+	# Initialize policies. Deepcopies are made in run_game()
+	player_a_policy = Policy(model, 'Alice', 'Bob', 'row', player_a_persona, player_a_strategic_reasoning, show_past_reasoning_player_a)
+	player_b_policy = Policy(model, 'Bob', 'Alice', 'column', player_b_persona, player_b_strategic_reasoning, show_past_reasoning_player_b)
+	
+	# Run games in parallel
+	max_workers = 4
+	with ThreadPoolExecutor(max_workers=max_workers) as executor:
+		games = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob = end_prob, fname=f"{output_fname}-{n}", matrix=matrix, max_game_rounds=max_game_rounds, total_message_rounds = total_message_rounds) for n in range(num_games)]
+  
+if __name__ == "__main__":
+    main()
