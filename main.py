@@ -244,8 +244,6 @@ def run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, resul
 	
 	# Conduct message exchange and get final action from player who sends the final message
 	outputs = []
-	results_dict_i = {f"{names_tuple[0]}_output": [], f"{names_tuple[1]}_output": [], "messages": None}
-	current_round_info = []
 
 	for ix, speaker_index in enumerate(speaker_indices):
 		speaker, non_speaker = names_tuple[speaker_index], names_tuple[1-speaker_index]
@@ -253,9 +251,6 @@ def run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, resul
 		history_str = results_to_history_str(policy, names_tuple, results_dict,  current_round_info)
 		output = policy.query_policy(history_str, ix+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
 		outputs.append((speaker, output))
-
-		results_dict_i[f"{speaker}_output"].append(output)
-		current_round_info.append({'speaker': speaker, 'message': output['message'], 'reasoning': output['reasoning']})
 		
 	# In the case where no messages are exchanged, both players only select actions (to avoid messages, message_round is made > total_message_rounds).
 	if total_message_rounds == 0:
@@ -265,8 +260,6 @@ def run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, resul
 		history_str = results_to_history_str(policy, names_tuple, results_dict, current_round_info)
 		output = policy.query_policy(history_str, total_message_rounds+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
 		outputs.append((speaker, output))
-		results_dict_i[f"{speaker}_output"].append(output)
-		current_round_info.append({'speaker': speaker, 'message': output['message'], 'reasoning': output['reasoning']})
 
  
 	# Get final action from the player who didn't get to send the final message (if there are message rounds) and the second player (if there are no message rounds)
@@ -276,32 +269,54 @@ def run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, resul
 	history_str = results_to_history_str(policy, names_tuple, results_dict, current_round_info)
 	output = policy.query_policy(history_str, total_message_rounds + 1, labels_row, labels_column, end_prob, matrix, total_message_rounds)
 	outputs.append((speaker, output))
-	
-	results_dict_i[f"{speaker}_output"].append(output)
 
-	return results_dict_i, current_round_info
+	return outputs
 
-def update_results(results_dict, results_dict_i, current_round_info, i, policy_dict, payoff_dict, names_tuple):
+def update_results(results_dict, round_outputs, i, policy_dict, payoff_dict, names_tuple):
 	"""
-	After this function, results_dict will look like:
-	{'summary': {'player_a_total_utility': 0.0, 'player_b_total_utility': 0.0, 'player_a_avg_utility': 0.0, 'player_b_avg_utility': 0.0},
-	'time-steps': {0: {'Alice_output': [{'reasoning': '...', 'action': 'C'}, {'reasoning': '...', 'action': 'C'}], 'Bob_output': [{'reasoning': '...', 'action': 'D'}], 'messages': [{'speaker': 'Alice', 'message': '...'}, {'speaker': 'Bob', 'message': '...'}]},
-	{1: {'Alice_output': [{'reasoning': '...', 'action': 'C'}, {'reasoning': '...', 'action': 'C'}], 'Bob_output': [{'reasoning': '...', 'action': 'D'}], 'messages': [{'speaker': 'Alice', 'message': '...'}, {'speaker': 'Bob', 'message': '...'}]},
+	Update summary statistics for game using latest round. Example JSON below.
+	-----------------------
+	results_dict = {
+		'summary': {
+			'player_a_total_utility': <value>,
+			'player_b_total_utility': <value>,
+			'player_a_avg_utility': <value>,
+			'player_b_avg_utility': <value>
+		},
+		'rounds': [
+			{
+				'message_rounds': [
+					{'player': <player>, 'reasoning': <reasoning>, 'message': <message>, 'action': <action>},
+					...
+				],
+				'outcome': {
+					'player_a_payoff': <value>,
+					'player_b_payoff': <value>
+				}
+			},
+			...
+		]
 	}
+	-----------------------
+	As results_dict['rounds'] and results_dict['rounds'][i]['message_rounds'] are lists, rounds and message_rounds have an implicit order.
 	"""
-	player_a_action = policy_dict[names_tuple[0]].most_recent_action
-	player_b_action = policy_dict[names_tuple[1]].most_recent_action
-
+	player_a, player_b = names_tuple[0], names_tuple[1]
+	player_a_action, player_b_action  = policy_dict[player_a].most_recent_action, policy_dict[player_b].most_recent_action
 	player_a_payoff, player_b_payoff = payoff_dict[f'{player_a_action},{player_b_action}']
-	results_dict['summary']['player_a_total_utility'] += player_a_payoff
-	results_dict['summary']['player_b_total_utility'] += player_b_payoff
-	results_dict['summary']['player_a_avg_utility'] = results_dict['summary']['player_a_total_utility'] / (i+1)
-	results_dict['summary']['player_b_avg_utility'] = results_dict['summary']['player_b_total_utility'] / (i+1)
-
-	# Remove reasoning from current_round_info as already included
-	#del current_round_info['reasoning']
-	results_dict_i['messages'] = current_round_info
-	results_dict['time-steps'][i] = results_dict_i
+	results_dict['summary'][f'{player_a}_total_utility'] += player_a_payoff
+	results_dict['summary'][f'{player_b}_total_utility'] += player_b_payoff
+	results_dict['summary'][f'{player_a}_avg_utility'] = results_dict['summary'][f'{player_a}_total_utility'] / (i+1)
+	results_dict['summary'][f'{player_b}_avg_utility'] = results_dict['summary'][f'{player_b}_total_utility'] / (i+1)
+	
+	results_dict['rounds'].append({})
+	results_dict['rounds'][-1]['message_rounds'] = []
+	results_dict['rounds'][-1]['outcome'] = {f'{player_a}_payoff': player_a_payoff, f'{player_b}_payoff': player_b_payoff}
+	for message_round, output in enumerate(round_outputs):
+		player = output[0]
+		reasoning = output[1]['reasoning']
+		message = output[1]['message']
+		action = output[1]['action']
+		results_dict['rounds'][-1]['message_rounds'].append({'player': player, 'reasoning': reasoning, 'message': message, 'action': action})
 
 	return results_dict
 
@@ -311,7 +326,7 @@ def run_game(player_a_policy, player_b_policy, end_prob: float, fname: str, matr
 	player_b_policy = deepcopy(player_b_policy)
 	
 	# Initialize values and dictionaries to store results and values
-	results_dict = {'summary': {}, 'time-steps': {}}
+	results_dict = {'summary': {}, 'rounds': []}
 	results_dict['summary']['player_a_total_utility'] = 0.
 	results_dict['summary']['player_b_total_utility'] = 0.
 	policy_dict = {player_a_policy.player_name: player_a_policy, 
@@ -338,8 +353,8 @@ def run_game(player_a_policy, player_b_policy, end_prob: float, fname: str, matr
 		if np.random.random() < end_prob:
 			break
 		else:
-			results_dict_i, current_round_info = run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, end_prob, total_message_rounds)
-			results_dict = update_results(results_dict, results_dict_i, current_round_info, round_num, policy_dict, payoff_dict, names_tuple)
+			round_outputs = run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, end_prob, total_message_rounds)
+			results_dict = update_results(results_dict, round_outputs, round_num, policy_dict, payoff_dict, names_tuple)
 			json.dump(results_dict, open(f"{output_dir}/{fname}.json", "w"))
 			round_num += 1
 	return results_dict
