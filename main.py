@@ -3,6 +3,7 @@ from copy import deepcopy
 import logging
 import json
 import string
+import re
 from collections import defaultdict
 import numpy as np
 import pandas as pd
@@ -24,7 +25,8 @@ main() calls run_game() multiple times in parallel and initializes objects of cl
 run_game() calls run_round() and update_results()
 run_round() calls query_policy() and results_to_history_str()
 results_to_history_str() goes into query_policy()
-query_policy() calls get_response_openai()
+query_policy() calls get_response()
+get_response() calls get_response_openai()
 get_response_openai() uses get_prompts()
 get_prompts() uses matrix_to_str()
 """
@@ -44,15 +46,24 @@ class Policy:
 		self.most_recent_action = None
 
 	def query_policy(self, history_str, message_round, labels_row, labels_column, end_prob, matrix, total_message_rounds, **kwargs):
-		output = get_response_openai(self.player_name, self.opponent_name, self.role, self.persona, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=self.strategic_reasoning, sys_prompt_substitutions = self.sys_prompt_substitutions, model=self.model, **kwargs)
+		output = get_response(self.player_name, self.opponent_name, self.role, self.persona, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=self.strategic_reasoning, sys_prompt_substitutions = self.sys_prompt_substitutions, model=self.model, **kwargs)
 		self.most_recent_action = output['action']
 		return output
 
-def always_defect(player_name, opponent_name, end_prob, results):
-	answer = '{"reasoning": "", "action": "D"}'
-	return answer
+# Replacer helper function for inserting values for custom keys
+# Outer function to create a closure
+def create_replacer(values_dict):
+    # Inner function to replace placeholders
+    def replace_placeholder(match):
+        key = match.group(1)
+        return str(values_dict.get(key, ""))
+    return replace_placeholder
 
-def get_strategic_reasoning_prompt(examples_to_include=('simultaneous_22')):
+def always_defect():
+	answer = '{"reasoning": "", "message": "","action": "D"}'
+	return json.loads(answer)
+
+def get_strategic_reasoning_prompt(examples_to_include=('simultaneous_22.txt')):
 	files = os.listdir('./prompts/strategic_reasoning')
 	prompt = 'Below are examples of strategic reasoning from other games. You should use similar reasoning patterns in making your own decision.'
 	for fname in files:
@@ -61,7 +72,6 @@ def get_strategic_reasoning_prompt(examples_to_include=('simultaneous_22')):
 				text = f.read()
 			prompt += f'\n{text}'
 	return prompt
-
 
 def matrix_to_str(matrix, labels_row, labels_column, player_name, opponent_name, role):
 	if role == 'row':
@@ -96,31 +106,34 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 		labels = labels_column
 		row, column = opponent_name, player_name
 	matrix_str = matrix_to_str(matrix, labels_row, labels_column, player_name, opponent_name, role)
+	
+	labels = '{' + ', '.join(labels) + '}'
 
 	# import prompt/personas.csv and get the intro, add_context, and output_schema values for the persona
 	prompts_df = pd.read_csv('./prompts/personas.csv')
 	prompts_df = prompts_df[prompts_df['persona'] == persona]
 	intro = prompts_df['intro'].iloc[0]
 	add_context = prompts_df['add_context'].iloc[0]
-	# TODO: get output_schema from CSV and get it formatted correctly
-	output_schema = """{{reasoning": "This is a string of up to 500 words of reasoning about what messages you should send and what action you should choose. You should consider the history of play thus far, and what the other player is saying, and think step-by-step about the best thing to do, keeping in mind your commitment to fairness. If there are message rounds left, your reasoning should end with: 'Therefore, I will say <summary of message to {{opponent_name}}>.' If it is the last message round, or there are no message rounds left, you should say: 'Therefore, my action will be <intended action>.'", "message": "<A message to the other player. Note that this will not be sent if there are no message rounds left.>", "action": "<A string in {{labels}}. This is the action that you would take (if it isn't the final message round) or the action that you will in fact take (if it is the final message round).>}}"""
-#prompts_df['output_schema'].iloc[0]
-
+	output_schema = prompts_df['output_schema'].iloc[0]	
+	 
 	system = ""
 	system += f"{intro} " if intro else ""
-	system += f"Your name is {player_name}, and the agent you are playing against is named {opponent_name}. At each time-step, you and {opponent_name} will exchange messages. {total_message_rounds} messages in total will be exchanged, with the first speaker being chosen at random in each round. In each round, you and {opponent_name} will simultaneously choose your actions. Your available actions are labeled {', '.join(labels)}. The game has a {end_prob}% chance of ending after every time-step. Here are the payoffs from the payoff matrix:\n{matrix_str}.\n\nBefore each time-step, you will be shown a summary of the history of play thus far."
+	system += f"Your name is {player_name}, and the agent you are playing against is named {opponent_name}. At each time-step, you and {opponent_name} will exchange messages. {total_message_rounds} messages in total will be exchanged, with the first speaker being chosen at random in each round. In each round, you and {opponent_name} will simultaneously choose your actions. Your available actions are labeled {labels}. The game has a {end_prob}% chance of ending after every time-step. Here are the payoffs from the payoff matrix:\n{matrix_str}.\n\nBefore each time-step, you will be shown a summary of the history of play thus far."
 	system += f" {add_context} " if add_context else ""
 	system += f"You should return a JSON with the following format (key names should be in double quotes; you must always fill out every field - but you can respond with an empty string if you there are no more message rounds):\n\n{output_schema}"
-	# Include any values that have not been added
-	#print(system)
-	#print('\n\n')
-	sys_prompt_substitutions['opponent_name'] = opponent_name
-	sys_prompt_substitutions['labels'] = labels
-	#print(sys_prompt_substitutions)
 
-	dictionary = defaultdict(str, **sys_prompt_substitutions)
-	#print(dictionary)
-	#system = system.format_map(dictionary)
+	# Include any values that have not been added
+	sys_prompt_substitutions['opponent_name'] = opponent_name
+	print(f"\n\nLABELS: {labels}\n\n")
+	sys_prompt_substitutions['labels'] = labels
+	print('sys_prompt_substitutions: ', sys_prompt_substitutions)
+	# Regular expression to find {key}
+	pattern = r'{([^{}]+)}'
+	replacer = create_replacer(sys_prompt_substitutions)
+	# Replace placeholders in the template
+	system = re.sub(pattern, replacer, system)
+	system = system.replace("{{", "{").replace("}}", "}")
+	print('system final: ', system)
 
 	# Construct user prompt
 	if message_round > total_message_rounds:
@@ -130,6 +143,8 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 	else:
 		final_message_round = f"It is message round {message_round} of {total_message_rounds}."
 	user = f"Here is a summary of the history of play thus far, in the order ({row}, {column}): {history_str}.\n\n{final_message_round} Now please output a correctly-formatted JSON:"
+ 
+	print('user final: ', user)
 	return system, user
 
 # Sends request and gets JSON response from the OpenAI API. In the future, we may want to add get_response_anthropic etc.
@@ -143,7 +158,9 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 	prompts_df = pd.read_csv('./prompts/personas.csv')
 	prompts_df = prompts_df[prompts_df['persona'] == persona]
 	output_schema = prompts_df['output_schema'].iloc[0]
-	json_schema = json.loads(output_schema)
+	#output_schema[1:len(output_schema)-1])
+	json_schema = json.loads(output_schema[1:len(output_schema)-1]) #keys(['reasoning', 'message', 'action'])
+	print('json_schema keys: ', json_schema.keys())
 	
 	for _ in range(max_retries):
 		try:
@@ -174,10 +191,16 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 	
 	if not answer_dict:
 		# If it does not succeed after multiple retries, consider this a failed game and log it
-		#print('Failed to get response from OpenAI API')
 		logging.error('Failed to get response from OpenAI API')
  
 	return answer_dict
+
+def get_response(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=None, total_message_rounds=None, strategic_reasoning=False, sys_prompt_substitutions={}, model='gpt-4-32k', **kwargs):
+    if persona == "always_defect":
+        return always_defect()
+    
+	# if none of the above
+    return get_response_openai(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=message_round, total_message_rounds=total_message_rounds, strategic_reasoning=strategic_reasoning, sys_prompt_substitutions=sys_prompt_substitutions, model=model, **kwargs)
 
 def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 	history_str = ''
@@ -188,11 +211,9 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 	current_player = policy.player_name
 	# Summarize previous rounds using results
 	for i, round_ in enumerate(results['rounds']):
-		history_str += f'Round {i+1}:\n'
+		history_str += f'ROUND {i+1}:\n'
 		# Summarize any combination of {reasoning, messages, actions}
 		for j, message_round in enumerate(round_['message_rounds']):
-			print("ROUND: ", round_)
-			print("MESSAGE ROUND: ", message_round)
 			if show_past_reasoning and (message_round['player'] == current_player):
 				history_str += f"Your reasoning: {message_round['reasoning']}\n"
 			
@@ -215,18 +236,14 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 			other_payoff = round_['outcome'][f'{player_a}_payoff'] if current_player != player_a else round_['outcome'][f'{player_b}_payoff']
 			other_final_action = round_['message_rounds'][-1]['action'] if round_['message_rounds'][-1]['player'] != current_player else round_['message_rounds'][-2]['action']
    
-			history_str += f"Outcome of round {i+1}: At the end of the round, you chose {your_final_action}. On the other hand, the other party chose {other_final_action}. This resulted in a payoff of {your_payoff} for you and a payoff of {other_payoff} for the other party.\n"
+			history_str += f"OUTCOME OF ROUND {i+1}: At the end of the round, you chose {your_final_action}. On the other hand, the other party chose {other_final_action}. This resulted in a payoff of {your_payoff} for you and a payoff of {other_payoff} for the other party.\n\nBEGIN NEW ROUND\n"
 		
 		history_str += "\n"
 	
 	# Summarize the new round so far, if there is info
 	if round_outputs:
-		history_str += f"Current round:\n"
-		#print("ROUND OUTPUTS: ", round_outputs)
+		history_str += f"CURRENT ROUND:\n"
 		for j, (player, message_round) in enumerate(round_outputs):
-			#print("j: ", j)
-			#print("MESSAGE ROUND:", message_round)
-			#player = message_round[0]
 			reasoning = message_round['reasoning']
 			message = message_round['message']
 			action = message_round['action']
@@ -306,14 +323,7 @@ def update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_d
 	-----------------------
 	As results_dict['rounds'] and results_dict['rounds'][i]['message_rounds'] are lists, rounds and message_rounds have an implicit order.
 	"""
-	"""
-	print("RESULTS DICT: ", results_dict)
-	print("ROUND OUTPUTS: ", round_outputs)
-	print("ROUND IDX", round_idx)
-	print("POLICY DICT", policy_dict)
-	print("PAYOFF DICT", payoff_dict)
-	print("NAMES TUPLE: ", names_tuple)
-	"""
+
 	player_a, player_b = names_tuple[0], names_tuple[1]
 	player_a_action, player_b_action  = policy_dict[player_a].most_recent_action, policy_dict[player_b].most_recent_action
 	player_a_payoff, player_b_payoff = payoff_dict[f'{player_a_action},{player_b_action}']
@@ -378,18 +388,15 @@ def run_game(player_a_policy, player_b_policy, end_prob: float, fname: str, matr
 			else:
 				round_outputs = run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, end_prob, total_message_rounds)
 				results_dict = update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_dict, names_tuple)
-				print(f"{output_dir}/{fname}.json")
 				json.dump(results_dict, open(f"{output_dir}/{fname}.json", "w"))
 				round_idx += 1
-		print(f"Reached the end.\n\nResults dict:{results_dict}")
+
 		return results_dict
 	except Exception as e:
-		"""
+		logging.exception(e)
 		if os.path.exists(f"{output_dir}/{fname}.json"):
 			os.remove(f"{output_dir}/{fname}.json")
 			logging(f"File {f'{output_dir}/{fname}.json'} deleted due to error.")
-		"""
-		logging.exception(e)
 
 def main():	
 	### Matrix for Bach or Stravinsky
@@ -399,18 +406,18 @@ def main():
 	
 	# Game Parameters
 	end_prob = 0.001
-	num_games = 1
+	num_games = 4
 	max_game_rounds = 3
 	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
-	output_fname = f"test"
+	output_fname = f"vanilla-vs-exploiter"
 
 	# Player A Parameters
 	model_a = 'gpt-4'
 	player_a_name = "Alice"
 	player_a_role = "row"
-	player_a_persona = 'fair'
+	player_a_persona = 'vanilla'
 	sys_prompt_substitutions_player_a = {} #Only need this if there are keys within the prompt you'd like to fill with a specified value
-	player_a_strategic_reasoning = True
+	player_a_strategic_reasoning = False
 	show_past_reasoning_player_a = True
 	show_messages_player_a = True
 	show_intended_actions_player_a = True
@@ -419,9 +426,9 @@ def main():
 	model_b = 'gpt-4'
 	player_b_name = "Bob"
 	player_b_role = "column"
-	player_b_persona = 'fair'
+	player_b_persona = 'exploiter'
 	sys_prompt_substitutions_player_b = {}
-	player_b_strategic_reasoning = True
+	player_b_strategic_reasoning = False
 	show_past_reasoning_player_b = True
 	show_messages_player_b = True
 	show_intended_actions_player_b = True
