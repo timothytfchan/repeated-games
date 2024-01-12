@@ -7,13 +7,14 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import openai
-import time
-from concurrent.futures import ThreadPoolExecutor
+from openai import OpenAI
 
 from dotenv import load_dotenv
 load_dotenv()
-openai.api_key = os.getenv('OPENAI_API_KEY')
-openai.organization = os.getenv('OPENAI_ORGANIZATION')
+
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'), organization=os.getenv('OPENAI_ORGANIZATION'))
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -101,6 +102,7 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 	prompts_df = prompts_df[prompts_df['persona'] == persona]
 	intro = prompts_df['intro'].iloc[0]
 	add_context = prompts_df['add_context'].iloc[0]
+	# TODO: get output_schema from CSV and get it formatted correctly
 	output_schema = """{{reasoning": "This is a string of up to 500 words of reasoning about what messages you should send and what action you should choose. You should consider the history of play thus far, and what the other player is saying, and think step-by-step about the best thing to do, keeping in mind your commitment to fairness. If there are message rounds left, your reasoning should end with: 'Therefore, I will say <summary of message to {{opponent_name}}>.' If it is the last message round, or there are no message rounds left, you should say: 'Therefore, my action will be <intended action>.'", "message": "<A message to the other player. Note that this will not be sent if there are no message rounds left.>", "action": "<A string in {{labels}}. This is the action that you would take (if it isn't the final message round) or the action that you will in fact take (if it is the final message round).>}}"""
 #prompts_df['output_schema'].iloc[0]
 
@@ -110,14 +112,14 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 	system += f" {add_context} " if add_context else ""
 	system += f"You should return a JSON with the following format (key names should be in double quotes; you must always fill out every field - but you can respond with an empty string if you there are no more message rounds):\n\n{output_schema}"
 	# Include any values that have not been added
-	print(system)
-	print('\n\n')
+	#print(system)
+	#print('\n\n')
 	sys_prompt_substitutions['opponent_name'] = opponent_name
 	sys_prompt_substitutions['labels'] = labels
-	print(sys_prompt_substitutions)
+	#print(sys_prompt_substitutions)
 
 	dictionary = defaultdict(str, **sys_prompt_substitutions)
-	print(dictionary)
+	#print(dictionary)
 	#system = system.format_map(dictionary)
 
 	# Construct user prompt
@@ -145,11 +147,11 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 	
 	for _ in range(max_retries):
 		try:
-			completion = openai.ChatCompletion.create(model=model, messages=[{'role': 'system', 'content': system, }, {'role': 'user', 'content': user}], max_tokens=800, temperature=1.0, **kwargs)
+			completion = client.chat.completions.create(model=model, messages=[{'role': 'system', 'content': system, }, {'role': 'user', 'content': user}], max_tokens=800, temperature=1.0, **kwargs)
 			# Not valid JSON if there are too many tokens and it gets cut off
-			if completion.choices[0]['finish_reason'] != "stop":
+			if completion.choices[0].finish_reason != "stop":
 				raise Exception("Completion error: finish_reason is not stop")
-			answer = completion['choices'][0]['message']['content']
+			answer = completion.choices[0].message.content
 			answer_dict = json.loads(answer)
 
 			# Confirm that it follows the JSON schema we are interested in
@@ -157,7 +159,7 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 				raise Exception(f"JSON returned with missing key")
 			break
 		except (
-			openai.error.RateLimitError,
+			openai.RateLimitError,
 			openai.error.ServiceUnavailableError,
 			openai.error.APIError,
 			openai.error.APIConnectionError,
@@ -185,31 +187,33 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 	show_intended_actions = policy.show_intended_actions
 	current_player = policy.player_name
 	# Summarize previous rounds using results
-	for i, round_ in results['rounds']:
+	for i, round_ in enumerate(results['rounds']):
 		history_str += f'Round {i+1}:\n'
 		# Summarize any combination of {reasoning, messages, actions}
-		for j, message_round in round_['message_rounds']:
-			if show_past_reasoning and (message_round[j]['player'] == current_player):
-				history_str += f"Your reasoning: {message_round[j]['reasoning']}\n"
+		for j, message_round in enumerate(round_['message_rounds']):
+			print("ROUND: ", round_)
+			print("MESSAGE ROUND: ", message_round)
+			if show_past_reasoning and (message_round['player'] == current_player):
+				history_str += f"Your reasoning: {message_round['reasoning']}\n"
 			
-			if show_messages and (message_round[j]['player'] == current_player):
-				history_str += f"Your message: {message_round[j]['message']}\n"
+			if show_messages and (message_round['player'] == current_player):
+				history_str += f"Your message: {message_round['message']}\n"
 
-			if show_messages and (message_round[j]['player'] != current_player):
-				history_str += f"Other party's message: {message_round[j]['message']}\n"
+			if show_messages and (message_round['player'] != current_player):
+				history_str += f"Other party's message: {message_round['message']}\n"
 
-			if show_intended_actions and (message_round[j]['player'] == current_player):
-				history_str += f"Your intended action at t={j+1} within this round: {message_round[j]['action']}\n"
+			if show_intended_actions and (message_round['player'] == current_player):
+				history_str += f"Your intended action at t={j+1} within this round: {message_round['action']}\n"
 
 			history_str += "\n"
 		
 		# Summarize final actions and round outcomes
 		if i+1 == len(round_):
-			your_payoff = round_['outcome'][-1][f'{player_a}_payoff'] if current_player == player_a else round_['outcome'][-1][f'{player_b}_payoff']
-			your_final_action = round_['message_round'][-1]['action'] if round_['message_round'][-1]['player'] == current_player else round_['message_round'][-2]['action']
+			your_payoff = round_['outcome'][f'{player_a}_payoff'] if current_player == player_a else round_['outcome'][f'{player_b}_payoff']
+			your_final_action = round_['message_rounds'][-1]['action'] if round_['message_rounds'][-1]['player'] == current_player else round_['message_rounds'][-2]['action']
 
-			other_payoff = round_['outcome'][-1][f'{player_a}_payoff'] if current_player != player_a else round_['outcome'][-1][f'{player_b}_payoff']
-			other_final_action = round_['message_round'][-1]['action'] if round_['message_round'][-1]['player'] != current_player else round_['message_round'][-2]['action']
+			other_payoff = round_['outcome'][f'{player_a}_payoff'] if current_player != player_a else round_['outcome'][f'{player_b}_payoff']
+			other_final_action = round_['message_rounds'][-1]['action'] if round_['message_rounds'][-1]['player'] != current_player else round_['message_rounds'][-2]['action']
    
 			history_str += f"Outcome of round {i+1}: At the end of the round, you chose {your_final_action}. On the other hand, the other party chose {other_final_action}. This resulted in a payoff of {your_payoff} for you and a payoff of {other_payoff} for the other party.\n"
 		
@@ -218,11 +222,14 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 	# Summarize the new round so far, if there is info
 	if round_outputs:
 		history_str += f"Current round:\n"
-		for j, message_round in round_outputs:
-			player = message_round[0]
-			reasoning = message_round[1]['reasoning']
-			message = message_round[1]['message']
-			action = message_round[1]['action']
+		#print("ROUND OUTPUTS: ", round_outputs)
+		for j, (player, message_round) in enumerate(round_outputs):
+			#print("j: ", j)
+			#print("MESSAGE ROUND:", message_round)
+			#player = message_round[0]
+			reasoning = message_round['reasoning']
+			message = message_round['message']
+			action = message_round['action']
 			if show_past_reasoning and (player == current_player):
 				history_str += f"Your reasoning: {reasoning}\n"
 			
@@ -299,6 +306,14 @@ def update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_d
 	-----------------------
 	As results_dict['rounds'] and results_dict['rounds'][i]['message_rounds'] are lists, rounds and message_rounds have an implicit order.
 	"""
+	"""
+	print("RESULTS DICT: ", results_dict)
+	print("ROUND OUTPUTS: ", round_outputs)
+	print("ROUND IDX", round_idx)
+	print("POLICY DICT", policy_dict)
+	print("PAYOFF DICT", payoff_dict)
+	print("NAMES TUPLE: ", names_tuple)
+	"""
 	player_a, player_b = names_tuple[0], names_tuple[1]
 	player_a_action, player_b_action  = policy_dict[player_a].most_recent_action, policy_dict[player_b].most_recent_action
 	player_a_payoff, player_b_payoff = payoff_dict[f'{player_a_action},{player_b_action}']
@@ -310,11 +325,10 @@ def update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_d
 	results_dict['rounds'].append({})
 	results_dict['rounds'][-1]['message_rounds'] = []
 	results_dict['rounds'][-1]['outcome'] = {f'{player_a}_payoff': player_a_payoff, f'{player_b}_payoff': player_b_payoff}
-	for k, message_round in enumerate(round_outputs):
-		player = message_round[0]
-		reasoning = message_round[1]['reasoning']
-		message = message_round[1]['message']
-		action = message_round[1]['action']
+	for k, (player, message_round) in enumerate(round_outputs):
+		reasoning = message_round['reasoning']
+		message = message_round['message']
+		action = message_round['action']
 		results_dict['rounds'][-1]['message_rounds'].append({'player': player, 'reasoning': reasoning, 'message': message, 'action': action})
 
 	return results_dict
@@ -342,8 +356,8 @@ def run_game(player_a_policy, player_b_policy, end_prob: float, fname: str, matr
 		
 		# Initialize values and dictionaries to store results and values
 		results_dict = {'summary': {}, 'rounds': []}
-		results_dict['summary']['player_a_total_utility'] = 0.
-		results_dict['summary']['player_b_total_utility'] = 0.
+		results_dict['summary'][f'{player_a_policy.player_name}_total_utility'] = 0.
+		results_dict['summary'][f'{player_b_policy.player_name}_total_utility'] = 0.
 		policy_dict = {player_a_policy.player_name: player_a_policy, 
 						player_b_policy.player_name: player_b_policy}
 		names_tuple = (player_a_policy.player_name, player_b_policy.player_name)
@@ -364,13 +378,17 @@ def run_game(player_a_policy, player_b_policy, end_prob: float, fname: str, matr
 			else:
 				round_outputs = run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, end_prob, total_message_rounds)
 				results_dict = update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_dict, names_tuple)
+				print(f"{output_dir}/{fname}.json")
 				json.dump(results_dict, open(f"{output_dir}/{fname}.json", "w"))
 				round_idx += 1
+		print(f"Reached the end.\n\nResults dict:{results_dict}")
 		return results_dict
 	except Exception as e:
+		"""
 		if os.path.exists(f"{output_dir}/{fname}.json"):
 			os.remove(f"{output_dir}/{fname}.json")
 			logging(f"File {f'{output_dir}/{fname}.json'} deleted due to error.")
+		"""
 		logging.exception(e)
 
 def main():	
@@ -381,7 +399,7 @@ def main():
 	
 	# Game Parameters
 	end_prob = 0.001
-	num_games = 2
+	num_games = 1
 	max_game_rounds = 3
 	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
 	output_fname = f"test"
