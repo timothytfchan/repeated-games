@@ -209,10 +209,10 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 	show_messages = policy.show_messages
 	show_intended_actions = policy.show_intended_actions
 	current_player = policy.player_name
-	# Summarize previous rounds using results
+	# Round level: Summarize previous rounds using results
 	for i, round_ in enumerate(results['rounds']):
 		history_str += f'ROUND {i+1}:\n'
-		# Summarize any combination of {reasoning, messages, actions}
+		# Message round level: Summarize any combination of {reasoning, messages, actions}
 		for j, message_round in enumerate(round_['message_rounds']):
 			if show_past_reasoning and (message_round['player'] == current_player):
 				history_str += f"Your reasoning: {message_round['reasoning']}\n"
@@ -228,15 +228,15 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 
 			history_str += "\n"
 		
-		# Summarize final actions and round outcomes
-		if i+1 == len(round_):
-			your_payoff = round_['outcome'][f'{player_a}_payoff'] if current_player == player_a else round_['outcome'][f'{player_b}_payoff']
-			your_final_action = round_['message_rounds'][-1]['action'] if round_['message_rounds'][-1]['player'] == current_player else round_['message_rounds'][-2]['action']
+			# Summarize final actions and round outcomes
+			if j+1 == len(round_['message_rounds']):
+				your_payoff = round_['outcome'][f'{player_a}_payoff'] if current_player == player_a else round_['outcome'][f'{player_b}_payoff']
+				your_final_action = round_['message_rounds'][-1]['action'] if round_['message_rounds'][-1]['player'] == current_player else round_['message_rounds'][-2]['action']
 
-			other_payoff = round_['outcome'][f'{player_a}_payoff'] if current_player != player_a else round_['outcome'][f'{player_b}_payoff']
-			other_final_action = round_['message_rounds'][-1]['action'] if round_['message_rounds'][-1]['player'] != current_player else round_['message_rounds'][-2]['action']
-   
-			history_str += f"OUTCOME OF ROUND {i+1}: At the end of the round, you chose {your_final_action}. On the other hand, the other party chose {other_final_action}. This resulted in a payoff of {your_payoff} for you and a payoff of {other_payoff} for the other party.\n\nBEGIN NEW ROUND\n"
+				other_payoff = round_['outcome'][f'{player_a}_payoff'] if current_player != player_a else round_['outcome'][f'{player_b}_payoff']
+				other_final_action = round_['message_rounds'][-1]['action'] if round_['message_rounds'][-1]['player'] != current_player else round_['message_rounds'][-2]['action']
+	
+				history_str += f"OUTCOME OF ROUND {i+1}: At the end of the round, you chose {your_final_action}. On the other hand, the other party chose {other_final_action}. This resulted in a payoff of {your_payoff} for you and a payoff of {other_payoff} for the other party.\n\nBEGIN NEW ROUND\n"
 		
 		history_str += "\n"
 	
