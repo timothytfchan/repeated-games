@@ -31,7 +31,7 @@ get_prompts() uses matrix_to_str()
 """
 
 class Policy:
-	def __init__(self, model, player_name, opponent_name, role, persona, strategic_reasoning=False, sys_prompt_substitutions={}, show_past_reasoning=True, show_messages = True, show_intended_actions=True):
+	def __init__(self, model, temperature, player_name, opponent_name, role, persona, strategic_reasoning=False, sys_prompt_substitutions={}, show_past_reasoning=True, show_messages = True, show_intended_actions=True):
 		self.player_name = player_name 
 		self.opponent_name = opponent_name # for prompt construction
 		self.role = role # for determining whether the player acts on rows or columns of matrix
@@ -39,13 +39,14 @@ class Policy:
 		self.strategic_reasoning = strategic_reasoning # whether to include optional strategic reasoning
 		self.sys_prompt_substitutions = sys_prompt_substitutions # for inserting more expressions into sys prompt (values replace keys in curly braces within template str)
 		self.model = model
+		self.temperature = temperature
 		self.show_past_reasoning = show_past_reasoning
 		self.show_messages = show_messages
 		self.show_intended_actions = show_intended_actions
 		self.most_recent_action = None
 
 	def query_policy(self, history_str, message_round, labels_row, labels_column, end_prob, matrix, total_message_rounds, **kwargs):
-		output = get_response(self.player_name, self.opponent_name, self.role, self.persona, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=self.strategic_reasoning, sys_prompt_substitutions = self.sys_prompt_substitutions, model=self.model, **kwargs)
+		output = get_response(self.player_name, self.opponent_name, self.role, self.persona, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=self.strategic_reasoning, sys_prompt_substitutions = self.sys_prompt_substitutions, model=self.model, temperature=self.temperature, **kwargs)
 		self.most_recent_action = output['action']
 		return output
 
@@ -143,7 +144,7 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 	return system, user
 
 # Sends request and gets JSON response from the OpenAI API. In the future, we may want to add get_response_anthropic etc.
-def get_response_openai(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=None, total_message_rounds=None, strategic_reasoning=False, sys_prompt_substitutions={}, model='gpt-4-32k', **kwargs):
+def get_response_openai(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=None, total_message_rounds=None, strategic_reasoning=False, sys_prompt_substitutions={}, model='gpt-4-32k', temperature = 1.0, **kwargs):
 	system, user = get_prompts(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=strategic_reasoning, sys_prompt_substitutions=sys_prompt_substitutions)
 	max_retries = 5
 	retry_interval_sec = 20
@@ -156,9 +157,12 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 	#output_schema[1:len(output_schema)-1])
 	json_schema = json.loads(output_schema[1:len(output_schema)-1]) #keys(['reasoning', 'message', 'action'])
 	
+	if model == 'gpt-4-1106-preview':
+		kwargs['response_format']={ "type": "json_object" }
+ 
 	for _ in range(max_retries):
 		try:
-			completion = client.chat.completions.create(model=model, messages=[{'role': 'system', 'content': system, }, {'role': 'user', 'content': user}], max_tokens=800, temperature=1.0, **kwargs)
+			completion = client.chat.completions.create(model=model, messages=[{'role': 'system', 'content': system, }, {'role': 'user', 'content': user}], max_tokens=800, temperature=temperature, **kwargs)
 			# Not valid JSON if there are too many tokens and it gets cut off
 			if completion.choices[0].finish_reason != "stop":
 				raise Exception("Completion error: finish_reason is not stop")
@@ -189,12 +193,12 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
  
 	return answer_dict
 
-def get_response(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=None, total_message_rounds=None, strategic_reasoning=False, sys_prompt_substitutions={}, model='gpt-4-32k', **kwargs):
+def get_response(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=None, total_message_rounds=None, strategic_reasoning=False, sys_prompt_substitutions={}, model='gpt-4-32k', temperature=1.0, **kwargs):
     if persona == "always_defect":
         return always_defect()
     
 	# if none of the above
-    return get_response_openai(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=message_round, total_message_rounds=total_message_rounds, strategic_reasoning=strategic_reasoning, sys_prompt_substitutions=sys_prompt_substitutions, model=model, **kwargs)
+    return get_response_openai(player_name, opponent_name, role, persona, end_prob, history_str, matrix, labels_row, labels_column, message_round=message_round, total_message_rounds=total_message_rounds, strategic_reasoning=strategic_reasoning, sys_prompt_substitutions=sys_prompt_substitutions, model=model, temperature = temperature, **kwargs)
 
 def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 	history_str = ''
@@ -400,12 +404,13 @@ def main():
 	
 	# Game Parameters
 	end_prob = 0.001
-	max_game_rounds = 3
+	max_game_rounds = 7
 	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
-	output_fname = f"vanilla-vs-exploiter"
+	output_fname = f"vanilla-vs-exploiter-longer"
 
 	# Player A Parameters
-	model_a = 'gpt-4'
+	model_a = 'gpt-4-1106-preview'
+	temperature_a = 0.3
 	player_a_name = "Alice"
 	player_a_role = "row"
 	player_a_persona = 'vanilla'
@@ -416,7 +421,8 @@ def main():
 	show_intended_actions_player_a = True #Show intended actions (private, not known to other player) at each stage of previous rounds
 	
 	# Player B Parameters
-	model_b = 'gpt-4'
+	model_b = 'gpt-4-1106-preview'
+	temperature_b = 0.3
 	player_b_name = "Bob"
 	player_b_role = "column"
 	player_b_persona = 'exploiter'
@@ -427,11 +433,11 @@ def main():
 	show_intended_actions_player_b = True
 	
 	# Initialize policies. Deepcopies are made in run_game() to avoid 
-	player_a_policy = Policy(model_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_messages_player_a, show_intended_actions_player_a)
-	player_b_policy = Policy(model_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_messages_player_b, show_intended_actions_player_b)
+	player_a_policy = Policy(model_a, temperature_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_messages_player_a, show_intended_actions_player_a)
+	player_b_policy = Policy(model_b, temperature_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_messages_player_b, show_intended_actions_player_b)
 	
 	# Run games in parallel
-	num_games = 4
+	num_games = 2
 	max_workers = 4
 
 	with ThreadPoolExecutor(max_workers=max_workers) as executor:
