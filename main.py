@@ -15,6 +15,8 @@ load_dotenv()
 openai.api_key = os.getenv('OPENAI_API_KEY')
 openai.organization = os.getenv('OPENAI_ORGANIZATION')
 
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+
 """
 Function calling hierarchy:
 main() calls run_game() multiple times in parallel and initializes objects of class Policy
@@ -27,7 +29,7 @@ get_prompts() uses matrix_to_str()
 """
 
 class Policy:
-	def __init__(self, model, player_name, opponent_name, role, persona, strategic_reasoning=False, sys_prompt_substitutions={}, show_past_reasoning=True, show_intended_actions=True):
+	def __init__(self, model, player_name, opponent_name, role, persona, strategic_reasoning=False, sys_prompt_substitutions={}, show_past_reasoning=True, show_messages = True, show_intended_actions=True):
 		self.player_name = player_name 
 		self.opponent_name = opponent_name # for prompt construction
 		self.role = role # for determining whether the player acts on rows or columns of matrix
@@ -36,13 +38,12 @@ class Policy:
 		self.sys_prompt_substitutions = sys_prompt_substitutions # for inserting more expressions into sys prompt (values replace keys in curly braces within template str)
 		self.model = model
 		self.show_past_reasoning = show_past_reasoning
+		self.show_messages = show_messages
 		self.show_intended_actions = show_intended_actions
 		self.most_recent_action = None
 
 	def query_policy(self, history_str, message_round, labels_row, labels_column, end_prob, matrix, total_message_rounds, **kwargs):
-		output = get_response_openai(self.player_name, self.opponent_name, self.role, self.persona, end_prob, history_str, matrix, 
-										labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=self.strategic_reasoning,
-										sys_prompt_substitutions = self.sys_prompt_substitutions, model=self.model, persona=self.persona, **kwargs)
+		output = get_response_openai(self.player_name, self.opponent_name, self.role, self.persona, end_prob, history_str, matrix, labels_row, labels_column, message_round, total_message_rounds, strategic_reasoning=self.strategic_reasoning, sys_prompt_substitutions = self.sys_prompt_substitutions, model=self.model, **kwargs)
 		self.most_recent_action = output['action']
 		return output
 
@@ -100,15 +101,24 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 	prompts_df = prompts_df[prompts_df['persona'] == persona]
 	intro = prompts_df['intro'].iloc[0]
 	add_context = prompts_df['add_context'].iloc[0]
-	output_schema = prompts_df['output_schema'].iloc[0]
+	output_schema = """{{reasoning": "This is a string of up to 500 words of reasoning about what messages you should send and what action you should choose. You should consider the history of play thus far, and what the other player is saying, and think step-by-step about the best thing to do, keeping in mind your commitment to fairness. If there are message rounds left, your reasoning should end with: 'Therefore, I will say <summary of message to {{opponent_name}}>.' If it is the last message round, or there are no message rounds left, you should say: 'Therefore, my action will be <intended action>.'", "message": "<A message to the other player. Note that this will not be sent if there are no message rounds left.>", "action": "<A string in {{labels}}. This is the action that you would take (if it isn't the final message round) or the action that you will in fact take (if it is the final message round).>}}"""
+#prompts_df['output_schema'].iloc[0]
 
 	system = ""
 	system += f"{intro} " if intro else ""
-	system += f"Your name is {player_name}, and the agent you are playing against is named {opponent_name}. At each time-step, you and {opponent_name} will exchange messages. {total_message_rounds} messages in total will be exchanged, with the first speaker being chosen at random at each time-step. At each time-step, you and {opponent_name} will simultaneously choose your actions; the available actions are labeled {','.join(labels)}. The game has a {end_prob}\% chance of ending after every time-step. Here is the payoff matrix:\n{matrix_str}.\n\nBefore each time-step, you will be shown a summary of the history of play thus far."
+	system += f"Your name is {player_name}, and the agent you are playing against is named {opponent_name}. At each time-step, you and {opponent_name} will exchange messages. {total_message_rounds} messages in total will be exchanged, with the first speaker being chosen at random in each round. In each round, you and {opponent_name} will simultaneously choose your actions. Your available actions are labeled {', '.join(labels)}. The game has a {end_prob}% chance of ending after every time-step. Here are the payoffs from the payoff matrix:\n{matrix_str}.\n\nBefore each time-step, you will be shown a summary of the history of play thus far."
 	system += f" {add_context} " if add_context else ""
-	system += f"You should return a JSON with the following format (key names should be in double quotes; you must always fill out every field):\n\n{output_schema}"
+	system += f"You should return a JSON with the following format (key names should be in double quotes; you must always fill out every field - but you can respond with an empty string if you there are no more message rounds):\n\n{output_schema}"
 	# Include any values that have not been added
-	system = system.format_map(defaultdict(str, **sys_prompt_substitutions))
+	print(system)
+	print('\n\n')
+	sys_prompt_substitutions['opponent_name'] = opponent_name
+	sys_prompt_substitutions['labels'] = labels
+	print(sys_prompt_substitutions)
+
+	dictionary = defaultdict(str, **sys_prompt_substitutions)
+	print(dictionary)
+	#system = system.format_map(dictionary)
 
 	# Construct user prompt
 	if message_round > total_message_rounds:
@@ -116,7 +126,7 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 	elif message_round in (total_message_rounds-1, total_message_rounds):
 		final_message_round = f"It is message round {message_round} of {total_message_rounds}. This is your last chance to send a message."
 	else:
-		final_message_round = f"It is message_round {message_round} of {total_message_rounds}."
+		final_message_round = f"It is message round {message_round} of {total_message_rounds}."
 	user = f"Here is a summary of the history of play thus far, in the order ({row}, {column}): {history_str}.\n\n{final_message_round} Now please output a correctly-formatted JSON:"
 	return system, user
 
@@ -126,6 +136,13 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 	max_retries = 5
 	retry_interval_sec = 20
 	answer_dict = {}
+ 
+	# import prompt/personas.csv and get the output_schema values for the persona
+	prompts_df = pd.read_csv('./prompts/personas.csv')
+	prompts_df = prompts_df[prompts_df['persona'] == persona]
+	output_schema = prompts_df['output_schema'].iloc[0]
+	json_schema = json.loads(output_schema)
+	
 	for _ in range(max_retries):
 		try:
 			completion = openai.ChatCompletion.create(model=model, messages=[{'role': 'system', 'content': system, }, {'role': 'user', 'content': user}], max_tokens=800, temperature=1.0, **kwargs)
@@ -134,6 +151,10 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 				raise Exception("Completion error: finish_reason is not stop")
 			answer = completion['choices'][0]['message']['content']
 			answer_dict = json.loads(answer)
+
+			# Confirm that it follows the JSON schema we are interested in
+			if set(json_schema.keys()) != set(answer_dict.keys()):
+				raise Exception(f"JSON returned with missing key")
 			break
 		except (
 			openai.error.RateLimitError,
@@ -156,10 +177,11 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
  
 	return answer_dict
 
-def results_to_history_str(policy, names_tuple, results, round_outputs=None, messages=False):
+def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 	history_str = ''
 	player_a, player_b = names_tuple[0], names_tuple[1]
 	show_past_reasoning = policy.show_past_reasoning
+	show_messages = policy.show_messages
 	show_intended_actions = policy.show_intended_actions
 	current_player = policy.player_name
 	# Summarize previous rounds using results
@@ -170,10 +192,10 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None, mes
 			if show_past_reasoning and (message_round[j]['player'] == current_player):
 				history_str += f"Your reasoning: {message_round[j]['reasoning']}\n"
 			
-			if messages and (message_round[j]['player'] == current_player):
+			if show_messages and (message_round[j]['player'] == current_player):
 				history_str += f"Your message: {message_round[j]['message']}\n"
 
-			if messages and (message_round[j]['player'] != current_player):
+			if show_messages and (message_round[j]['player'] != current_player):
 				history_str += f"Other party's message: {message_round[j]['message']}\n"
 
 			if show_intended_actions and (message_round[j]['player'] == current_player):
@@ -204,10 +226,10 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None, mes
 			if show_past_reasoning and (player == current_player):
 				history_str += f"Your reasoning: {reasoning}\n"
 			
-			if messages and (player == current_player):
+			if show_messages and (player == current_player):
 				history_str += f"Your message: {message}\n"
 
-			if messages and (player != current_player):
+			if show_messages and (player != current_player):
 				history_str += f"Other party's message: {message}\n"
 
 			if show_intended_actions and (player == current_player):
@@ -227,29 +249,29 @@ def run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, resul
 		speaker, non_speaker = names_tuple[speaker_index], names_tuple[1-speaker_index]
 		policy = policy_dict[speaker]
 		history_str = results_to_history_str(policy, names_tuple, results_dict, round_outputs)
-		output = policy.query_policy(history_str, ix+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
-		round_outputs.append((speaker, output))
+		round_output = policy.query_policy(history_str, ix+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
+		round_outputs.append((speaker, round_output))
 		
-	# In the case where no messages are exchanged, both players only select actions (to avoid messages, message_round is made > total_message_rounds).
+	# In the case where total_message_rounds is zero, no messages are exchanged, both players only select actions (note: to avoid messages, message_round parameter is set to > total_message_rounds).
 	if total_message_rounds == 0:
 		speaker_index = first_speaker_index
 		speaker, non_speaker = names_tuple[speaker_index], names_tuple[1-speaker_index]
 		policy = policy_dict[speaker]
-		history_str = results_to_history_str(policy, names_tuple, results_dict, round_outputs)
-		output = policy.query_policy(history_str, total_message_rounds+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
-		round_outputs.append((speaker, output))
+		history_str = results_to_history_str(policy, names_tuple, results_dict, round_outputs, False)
+		round_output = policy.query_policy(history_str, total_message_rounds+1, labels_row, labels_column, end_prob, matrix, total_message_rounds) # LLM thinks and speaks here
+		round_outputs.append((speaker, round_output))
  
 	# Get final action from the player who didn't get to send the final message (if there are message rounds) and the second player (if there are no message rounds)
 	last_index = 1 - speaker_index
 	speaker, non_speaker = names_tuple[last_index], names_tuple[1-last_index]
 	policy = policy_dict[speaker]
 	history_str = results_to_history_str(policy, names_tuple, results_dict, round_outputs)
-	output = policy.query_policy(history_str, total_message_rounds + 1, labels_row, labels_column, end_prob, matrix, total_message_rounds)
-	round_outputs.append((speaker, output))
+	round_output = policy.query_policy(history_str, total_message_rounds + 1, labels_row, labels_column, end_prob, matrix, total_message_rounds)
+	round_outputs.append((speaker, round_output))
 
 	return round_outputs
 
-def update_results(results_dict, round_outputs, i, policy_dict, payoff_dict, names_tuple):
+def update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_dict, names_tuple):
 	"""
 	Update summary statistics for game using latest round. Example JSON below.
 	-----------------------
@@ -282,8 +304,8 @@ def update_results(results_dict, round_outputs, i, policy_dict, payoff_dict, nam
 	player_a_payoff, player_b_payoff = payoff_dict[f'{player_a_action},{player_b_action}']
 	results_dict['summary'][f'{player_a}_total_utility'] += player_a_payoff
 	results_dict['summary'][f'{player_b}_total_utility'] += player_b_payoff
-	results_dict['summary'][f'{player_a}_avg_utility'] = results_dict['summary'][f'{player_a}_total_utility'] / (i+1)
-	results_dict['summary'][f'{player_b}_avg_utility'] = results_dict['summary'][f'{player_b}_total_utility'] / (i+1)
+	results_dict['summary'][f'{player_a}_avg_utility'] = results_dict['summary'][f'{player_a}_total_utility'] / (round_idx+1)
+	results_dict['summary'][f'{player_b}_avg_utility'] = results_dict['summary'][f'{player_b}_total_utility'] / (round_idx+1)
 	
 	results_dict['rounds'].append({})
 	results_dict['rounds'][-1]['message_rounds'] = []
@@ -298,52 +320,58 @@ def update_results(results_dict, round_outputs, i, policy_dict, payoff_dict, nam
 	return results_dict
 
 def run_game(player_a_policy, player_b_policy, end_prob: float, fname: str, matrix: list[list], max_game_rounds: int = 20, total_message_rounds: int = 3):
-	# Check errors and if passed, make deep copies of policies
-	if (not isinstance(player_a_policy, Policy)) or (not isinstance(player_b_policy, Policy)):
-		raise TypeError('Argument is not an instance of the Policy class')
-	if player_a_policy.player_name == player_b_policy.player_name:
-		raise ValueError('Players cannot have the same name')
-	if fname == "":
-		raise ValueError('Filename cannot be empty')
-	if not (0 <= end_prob <= 1):
-		raise ValueError('Probability of termination out of range')
-
-	player_a_policy = deepcopy(player_a_policy)
-	player_b_policy = deepcopy(player_b_policy)
-	 
-	# Initialize values and dictionaries to store results and values
-	results_dict = {'summary': {}, 'rounds': []}
-	results_dict['summary']['player_a_total_utility'] = 0.
-	results_dict['summary']['player_b_total_utility'] = 0.
-	policy_dict = {player_a_policy.player_name: player_a_policy, 
-					player_a_policy.player_name: player_b_policy}
-	names_tuple = (player_a_policy.player_name, player_b_policy.player_name)
-
 	# Check if runs-{today_date} directory exists, if not, create it
 	today_date = time.strftime("%Y-%m-%d")
 	output_dir = f"results/runs-{today_date}"
 	if not os.path.exists(output_dir):
 		os.makedirs(output_dir)
-	
-	# Labels and payoffs
-	m, n = len(matrix), len(matrix[0])
-	if m > 26 or n > 26:
-		raise ValueError('Matrix is too large to label with the alphabet')
-	alphabet = string.ascii_uppercase
-	labels_row, labels_column = [alphabet[i] for i in range(len(matrix))], [alphabet[j] for j in range(len(matrix[0]))]
-	payoff_dict = {f'{labels_row[i]},{labels_column[j]}': matrix[i][j] for j in range(n) for i in range(m)}
-	
-	# Run rounds until game ends
-	round_num = 0
-	while round_num < max_game_rounds:
-		if np.random.random() < end_prob:
-			break
-		else:
-			round_outputs = run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, end_prob, total_message_rounds)
-			results_dict = update_results(results_dict, round_outputs, round_num, policy_dict, payoff_dict, names_tuple)
-			json.dump(results_dict, open(f"{output_dir}/{fname}.json", "w"))
-			round_num += 1
-	return results_dict
+
+	try:
+		# Check errors and if passed, make deep copies of policies
+		if (not isinstance(player_a_policy, Policy)) or (not isinstance(player_b_policy, Policy)):
+			raise TypeError('Argument is not an instance of the Policy class')
+		if player_a_policy.player_name == player_b_policy.player_name:
+			raise ValueError('Players cannot have the same name')
+		if fname == "":
+			raise ValueError('Filename cannot be empty')
+		if not (0 <= end_prob <= 1):
+			raise ValueError('Probability of termination is out of range')
+
+		player_a_policy = deepcopy(player_a_policy)
+		player_b_policy = deepcopy(player_b_policy)
+		
+		# Initialize values and dictionaries to store results and values
+		results_dict = {'summary': {}, 'rounds': []}
+		results_dict['summary']['player_a_total_utility'] = 0.
+		results_dict['summary']['player_b_total_utility'] = 0.
+		policy_dict = {player_a_policy.player_name: player_a_policy, 
+						player_b_policy.player_name: player_b_policy}
+		names_tuple = (player_a_policy.player_name, player_b_policy.player_name)
+		
+		# Labels and payoffs
+		m, n = len(matrix), len(matrix[0])
+		if m > 26 or n > 26:
+			raise ValueError('Matrix is too large to label with the alphabet')
+		alphabet = string.ascii_uppercase
+		labels_row, labels_column = [alphabet[i] for i in range(len(matrix))], [alphabet[j] for j in range(len(matrix[0]))]
+		payoff_dict = {f'{labels_row[i]},{labels_column[j]}': matrix[i][j] for j in range(n) for i in range(m)}
+		
+		# Run rounds until game ends
+		round_idx = 0
+		while round_idx < max_game_rounds:
+			if np.random.random() < end_prob:
+				break
+			else:
+				round_outputs = run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, results_dict, end_prob, total_message_rounds)
+				results_dict = update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_dict, names_tuple)
+				json.dump(results_dict, open(f"{output_dir}/{fname}.json", "w"))
+				round_idx += 1
+		return results_dict
+	except Exception as e:
+		if os.path.exists(f"{output_dir}/{fname}.json"):
+			os.remove(f"{output_dir}/{fname}.json")
+			logging(f"File {f'{output_dir}/{fname}.json'} deleted due to error.")
+		logging.exception(e)
 
 def main():	
 	### Matrix for Bach or Stravinsky
@@ -353,34 +381,36 @@ def main():
 	
 	# Game Parameters
 	end_prob = 0.001
-	num_games = 5
-	max_game_rounds = 16
+	num_games = 2
+	max_game_rounds = 3
 	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
-	output_fname = f"vanilla-symmetric-bos-16-turns"
+	output_fname = f"test"
 
 	# Player A Parameters
 	model_a = 'gpt-4'
 	player_a_name = "Alice"
 	player_a_role = "row"
-	player_a_persona = 'vanilla'
-	sys_prompt_substitutions_player_a = {}
+	player_a_persona = 'fair'
+	sys_prompt_substitutions_player_a = {} #Only need this if there are keys within the prompt you'd like to fill with a specified value
 	player_a_strategic_reasoning = True
 	show_past_reasoning_player_a = True
+	show_messages_player_a = True
 	show_intended_actions_player_a = True
 	
 	# Player B Parameters
 	model_b = 'gpt-4'
 	player_b_name = "Bob"
 	player_b_role = "column"
-	player_b_persona = 'vanilla'
+	player_b_persona = 'fair'
 	sys_prompt_substitutions_player_b = {}
 	player_b_strategic_reasoning = True
 	show_past_reasoning_player_b = True
+	show_messages_player_b = True
 	show_intended_actions_player_b = True
 	
 	# Initialize policies. Deepcopies are made in run_game()
-	player_a_policy = Policy(model_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_intended_actions_player_a)
-	player_b_policy = Policy(model_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_intended_actions_player_b)
+	player_a_policy = Policy(model_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_messages_player_a, show_intended_actions_player_a)
+	player_b_policy = Policy(model_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_messages_player_b, show_intended_actions_player_b)
 	
 	# Run games in parallel
 	max_workers = 4
