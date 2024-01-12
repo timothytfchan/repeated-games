@@ -4,7 +4,6 @@ import logging
 import json
 import string
 import re
-from collections import defaultdict
 import numpy as np
 import pandas as pd
 import openai
@@ -247,16 +246,16 @@ def results_to_history_str(policy, names_tuple, results, round_outputs=None):
 			reasoning = message_round['reasoning']
 			message = message_round['message']
 			action = message_round['action']
-			if show_past_reasoning and (player == current_player):
+			if player == current_player:
 				history_str += f"Your reasoning: {reasoning}\n"
 			
-			if show_messages and (player == current_player):
+			if player == current_player:
 				history_str += f"Your message: {message}\n"
 
-			if show_messages and (player != current_player):
+			if player != current_player:
 				history_str += f"Other party's message: {message}\n"
 
-			if show_intended_actions and (player == current_player):
+			if player == current_player:
 				history_str += f"Your intended action at t={j+1} within this round: {action}\n"
 	
 	return history_str.strip()
@@ -297,7 +296,7 @@ def run_round(policy_dict, names_tuple, matrix, labels_row, labels_column, resul
 
 def update_results(results_dict, round_outputs, round_idx, policy_dict, payoff_dict, names_tuple):
 	"""
-	Update summary statistics for game using latest round. Example JSON below.
+	Update summary statistics for game using latest round. Example of JSON below. `player_a` and `player_b` are replaced with the names of players.
 	-----------------------
 	results_dict = {
 		'summary': {
@@ -406,7 +405,6 @@ def main():
 	
 	# Game Parameters
 	end_prob = 0.001
-	num_games = 4
 	max_game_rounds = 3
 	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
 	output_fname = f"vanilla-vs-exploiter"
@@ -417,10 +415,10 @@ def main():
 	player_a_role = "row"
 	player_a_persona = 'vanilla'
 	sys_prompt_substitutions_player_a = {} #Only need this if there are keys within the prompt you'd like to fill with a specified value
-	player_a_strategic_reasoning = False
-	show_past_reasoning_player_a = True
-	show_messages_player_a = True
-	show_intended_actions_player_a = True
+	player_a_strategic_reasoning = False #By default, does not append strategic reasoning examples in other contexts to prompt
+	show_past_reasoning_player_a = True #Show reasoning from previous rounds
+	show_messages_player_a = True #Show messages from previous rounds
+	show_intended_actions_player_a = True #Show intended actions (private, not known to other player) at each stage of previous rounds
 	
 	# Player B Parameters
 	model_b = 'gpt-4'
@@ -433,12 +431,14 @@ def main():
 	show_messages_player_b = True
 	show_intended_actions_player_b = True
 	
-	# Initialize policies. Deepcopies are made in run_game()
+	# Initialize policies. Deepcopies are made in run_game() to avoid 
 	player_a_policy = Policy(model_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_messages_player_a, show_intended_actions_player_a)
 	player_b_policy = Policy(model_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_messages_player_b, show_intended_actions_player_b)
 	
 	# Run games in parallel
+	num_games = 4
 	max_workers = 4
+
 	with ThreadPoolExecutor(max_workers=max_workers) as executor:
 		futures = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob = end_prob, fname=f"{output_fname}-{n}", matrix=matrix, max_game_rounds=max_game_rounds, total_message_rounds = total_message_rounds) for n in range(num_games)]
 
