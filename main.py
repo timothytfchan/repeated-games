@@ -123,16 +123,13 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 
 	# Include any values that have not been added
 	sys_prompt_substitutions['opponent_name'] = opponent_name
-	print(f"\n\nLABELS: {labels}\n\n")
 	sys_prompt_substitutions['labels'] = labels
-	print('sys_prompt_substitutions: ', sys_prompt_substitutions)
 	# Regular expression to find {key}
 	pattern = r'{([^{}]+)}'
 	replacer = create_replacer(sys_prompt_substitutions)
 	# Replace placeholders in the template
 	system = re.sub(pattern, replacer, system)
 	system = system.replace("{{", "{").replace("}}", "}")
-	print('system final: ', system)
 
 	# Construct user prompt
 	if message_round > total_message_rounds:
@@ -143,7 +140,6 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 		final_message_round = f"It is message round {message_round} of {total_message_rounds}."
 	user = f"Here is a summary of the history of play thus far, in the order ({row}, {column}): {history_str}.\n\n{final_message_round} Now please output a correctly-formatted JSON:"
  
-	print('user final: ', user)
 	return system, user
 
 # Sends request and gets JSON response from the OpenAI API. In the future, we may want to add get_response_anthropic etc.
@@ -159,7 +155,6 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 	output_schema = prompts_df['output_schema'].iloc[0]
 	#output_schema[1:len(output_schema)-1])
 	json_schema = json.loads(output_schema[1:len(output_schema)-1]) #keys(['reasoning', 'message', 'action'])
-	print('json_schema keys: ', json_schema.keys())
 	
 	for _ in range(max_retries):
 		try:
