@@ -1,4 +1,5 @@
 import os
+import argparse
 from copy import deepcopy
 import logging
 import json
@@ -51,6 +52,7 @@ class Policy:
 		return output
 
 # Replacer helper function for inserting values for custom keys
+# Used instead of .format because there might be more key-value pairs than needed
 # Outer function to create a closure
 def create_replacer(values_dict):
     # Inner function to replace placeholders
@@ -109,28 +111,34 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 	
 	labels = '{' + ', '.join(labels) + '}'
 
-	# import prompt/personas.csv and get the intro, add_context, and output_schema values for the persona
-	prompts_df = pd.read_csv('./prompts/personas.csv')
-	prompts_df = prompts_df[prompts_df['persona'] == persona]
-	intro = prompts_df['intro'].iloc[0]
-	add_context = prompts_df['add_context'].iloc[0]
-	output_schema = prompts_df['output_schema'].iloc[0]	
-	 
+	# Include any values that have not been added
+	sys_prompt_substitutions['opponent_name'] = opponent_name
+	sys_prompt_substitutions['labels'] = labels
+
+	#Set up replacer
+	pattern = r'\{([^}]*)\}'
+	replacer = create_replacer(sys_prompt_substitutions)
+
+	# import prompt/personas.json and get the intro, add_context, and output_schema values for the persona
+	with open('./prompts/personas.json', 'r') as file:
+		data = json.load(file)
+	intro = data[persona]['intro']
+	intro = re.sub(pattern, replacer, intro)
+
+	add_context = data[persona]['add_context']
+	add_context = re.sub(pattern, replacer, add_context)
+
+	output_schema = data[persona]['output_schema']
+	# Fill in placeholders of every value in output_schema dictionary
+	for key, val in output_schema.items():
+		output_schema[key] = re.sub(pattern, replacer, val)
+	output_schema = json.dumps(output_schema, indent=2)
+
 	system = ""
 	system += f"{intro} " if intro else ""
 	system += f"Your name is {player_name}, and the agent you are playing against is named {opponent_name}. At each time-step, you and {opponent_name} will exchange messages. {total_message_rounds} messages in total will be exchanged, with the first speaker being chosen at random in each round. In each round, you and {opponent_name} will simultaneously choose your actions. Your available actions are labeled {labels}. The game has a {end_prob}% chance of ending after every time-step. Here are the payoffs from the payoff matrix:\n{matrix_str}.\n\nBefore each time-step, you will be shown a summary of the history of play thus far."
 	system += f" {add_context} " if add_context else ""
 	system += f"You should return a JSON with the following format (key names should be in double quotes; you must always fill out every field - but you can respond with an empty string if you there are no more message rounds):\n\n{output_schema}"
-
-	# Include any values that have not been added
-	sys_prompt_substitutions['opponent_name'] = opponent_name
-	sys_prompt_substitutions['labels'] = labels
-	# Regular expression to find {key}
-	pattern = r'{([^{}]+)}'
-	replacer = create_replacer(sys_prompt_substitutions)
-	# Replace placeholders in the template
-	system = re.sub(pattern, replacer, system)
-	system = system.replace("{{", "{").replace("}}", "}")
 
 	# Construct user prompt
 	if message_round > total_message_rounds:
@@ -139,8 +147,9 @@ def get_prompts(player_name, opponent_name, role, persona, end_prob, history_str
 		final_message_round = f"It is message round {message_round} of {total_message_rounds}. This is your last chance to send a message."
 	else:
 		final_message_round = f"It is message round {message_round} of {total_message_rounds}."
-	user = f"Here is a summary of the history of play thus far, in the order ({row}, {column}): {history_str}.\n\n{final_message_round} Now please output a correctly-formatted JSON:"
- 
+	user = f"Here is a summary of the history of play thus far:\n{history_str}.\n\n{final_message_round} Now please output a correctly-formatted JSON:"
+
+	#print("SYSTEM: ", system, '\n\n', 'USER: ', user)
 	return system, user
 
 # Sends request and gets JSON response from the OpenAI API. In the future, we may want to add get_response_anthropic etc.
@@ -413,7 +422,7 @@ def main():
 	temperature_a = 0.3
 	player_a_name = "Alice"
 	player_a_role = "row"
-	player_a_persona = 'vanilla'
+	player_a_persona = 'fair'
 	sys_prompt_substitutions_player_a = {} #Only need this if there are keys within the prompt you'd like to fill with a specified value
 	player_a_strategic_reasoning = False #By default, does not append strategic reasoning examples in other contexts to prompt
 	show_past_reasoning_player_a = True #Show reasoning from previous rounds
@@ -445,3 +454,126 @@ def main():
 
 if __name__ == "__main__":
 	main()
+
+
+
+"""
+class PlayerA(Policy):
+    def __init__(self, model, temperature, name, persona, config):
+        role = config["player_a_parameters"]["role"]
+        strategic_reasoning = config["player_a_parameters"]["strategic_reasoning"]
+        sys_prompt_substitutions = {}
+        show_past_reasoning = config["player_a_parameters"]["show_past_reasoning"]
+        show_messages = config["player_a_parameters"]["show_messages"]
+        show_intended_actions = config["player_a_parameters"]["show_intended_actions"]
+        
+        super().__init__(model, temperature, name, role, persona,
+                         strategic_reasoning, sys_prompt_substitutions,
+                         show_past_reasoning, show_messages, show_intended_actions)
+
+class PlayerB(Policy):
+    def __init__(self, model, temperature, name, persona, config):
+        role = config["player_b_parameters"]["role"]
+        strategic_reasoning = config["player_b_parameters"]["strategic_reasoning"]
+        sys_prompt_substitutions = {}
+        show_past_reasoning = config["player_b_parameters"]["show_past_reasoning"]
+        show_messages = config["player_b_parameters"]["show_messages"]
+        show_intended_actions = config["player_b_parameters"]["show_intended_actions"]
+        
+        super().__init__(model, temperature, name, role, persona,
+                         strategic_reasoning, sys_prompt_substitutions,
+                         show_past_reasoning, show_messages, show_intended_actions)
+
+def main():	
+	### Matrix for Bach or Stravinsky
+	matrix = [[(10,5), (0, 0)],
+			[(0,0), (5, 10)]]
+	### Modify matrix to suit needs
+	
+	# Game Parameters
+	end_prob = 0.001
+	max_game_rounds = 7
+	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
+	output_fname = f"vanilla-vs-exploiter-longer"
+
+	# Player A Parameters
+	model_a = 'gpt-4-1106-preview'
+	temperature_a = 0.3
+	player_a_name = "Alice"
+	player_a_role = "row"
+	player_a_persona = 'vanilla'
+	sys_prompt_substitutions_player_a = {} #Only need this if there are keys within the prompt you'd like to fill with a specified value
+	player_a_strategic_reasoning = False #By default, does not append strategic reasoning examples in other contexts to prompt
+	show_past_reasoning_player_a = True #Show reasoning from previous rounds
+	show_messages_player_a = True #Show messages from previous rounds
+	show_intended_actions_player_a = True #Show intended actions (private, not known to other player) at each stage of previous rounds
+	
+	# Player B Parameters
+	model_b = 'gpt-4-1106-preview'
+	temperature_b = 0.3
+	player_b_name = "Bob"
+	player_b_role = "column"
+	player_b_persona = 'exploiter'
+	sys_prompt_substitutions_player_b = {}
+	player_b_strategic_reasoning = False
+	show_past_reasoning_player_b = True
+	show_messages_player_b = True
+	show_intended_actions_player_b = True
+	
+	# Initialize policies. Deepcopies are made in run_game() to avoid 
+	player_a_policy = Policy(model_a, temperature_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_messages_player_a, show_intended_actions_player_a)
+	player_b_policy = Policy(model_b, temperature_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_messages_player_b, show_intended_actions_player_b)
+	
+	# Run games in parallel
+	num_games = 2
+	max_workers = 4
+
+	with ThreadPoolExecutor(max_workers=max_workers) as executor:
+		futures = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob = end_prob, fname=f"{output_fname}-{n}", matrix=matrix, max_game_rounds=max_game_rounds, total_message_rounds = total_message_rounds) for n in range(num_games)]
+
+def main(config, cli_args):
+	# Extract and override parameters from config using CLI arguments
+	# Instantiate PlayerA and PlayerB using the parameters and the config
+	player_a_policy = PlayerA(cli_args.model_a or config["player_a_parameters"]["model"],
+							cli_args.temperature_a or config["player_a_parameters"]["temperature"],
+							cli_args.player_a_name or config["player_a_parameters"]["name"],
+							cli_args.player_a_persona or config["player_a_parameters"]["persona"],
+							config)
+
+	player_b_policy = PlayerB(cli_args.model_b or config["player_b_parameters"]["model"],
+							cli_args.temperature_b or config["player_b_parameters"]["temperature"],
+							cli_args.player_b_name or config["player_b_parameters"]["name"],
+							cli_args.player_b_persona or config["player_b_parameters"]["persona"],
+							config)
+
+	### Matrix for Bach or Stravinsky
+	matrix = [[(10,5), (0, 0)], 
+			[(0,0), (5, 10)]]
+ 	### Modify matrix to suit needs
+
+	with ThreadPoolExecutor(max_workers=cli_args.max_workers) as executor:
+		futures = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob = cli_args.end_prob, fname=f"{cli_args.output_fname}-{n}", matrix=matrix, max_game_rounds=cli_args.max_game_rounds, total_message_rounds = cli_args.total_message_rounds) for n in range(cli_args.num_games)]
+    
+
+if __name__ == "__main__":
+	parser = argparse.ArgumentParser(description='Run a game simulation between two players.')
+	parser.add_argument('--config', type=str, required=True, help='Path to the configuration file.')
+	# Define other CLI arguments for PlayerA and PlayerB
+	
+
+	# Common parameters for both players
+	parser.add_argument('--total_message_rounds', type=int, help='Total message rounds in each game round (overrides config).')
+	parser.add_argument('--max_game_rounds', type=int, help='Maximum game rounds (overrides config).')
+	parser.add_argument('--num_games', type=int, help='Number of games to run in parallel (overrides config).')
+	parser.add_argument('--end_prob', type=float, help='Game end probability (overrides config).')
+	parser.add_argument('--output_fname', type=str, help='Base filename for output files (overrides config).')
+
+	cli_args = parser.parse_args()
+
+	# Load the configuration file
+	with open(cli_args.config, 'r') as f:
+		config = json.load(f)
+
+	# Run the main function with the loaded config and CLI arguments
+	main(config, cli_args)
+"""
