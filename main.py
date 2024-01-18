@@ -82,7 +82,7 @@ def matrix_to_str(matrix, labels_row, labels_column, player_name, opponent_name,
 	elif role == 'column':
 		row = opponent_name
 		column = player_name
-	
+
 	m, n = len(matrix), len(matrix[0])
 	matrix_str = ''
 	for i in range(m):
@@ -449,6 +449,9 @@ def main(config, cli_args):
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Run a game simulation between two players.')
 
+	# Use config file or default to config.json settings (though note that CLI provided args will override config file settings)
+	parser.add_argument('--config', type=str, default='config.json', help='Path to the configuration file.')
+
 	# Player A CLI arguments
 	parser.add_argument('--model_a', type=str, help='Model for Player A.')
 	parser.add_argument('--temperature_a', type=float, help='Temperature for Player A.')
@@ -483,7 +486,6 @@ if __name__ == "__main__":
 	parser.add_argument('--output_fname', type=str, help='Base filename for output files.')
 
 	# Execution parameters
-	parser.add_argument('--config', type=str, required=True, help='Path to the configuration file.')
 	parser.add_argument('--max_game_rounds', type=int, help='Maximum game rounds.')
 	parser.add_argument('--max_workers', type=int, help='Maximum number of parallel workers.')
 
