@@ -82,7 +82,7 @@ def matrix_to_str(matrix, labels_row, labels_column, player_name, opponent_name,
 	elif role == 'column':
 		row = opponent_name
 		column = player_name
-
+	
 	m, n = len(matrix), len(matrix[0])
 	matrix_str = ''
 	for i in range(m):
@@ -158,13 +158,12 @@ def get_response_openai(player_name, opponent_name, role, persona, end_prob, his
 	max_retries = 5
 	retry_interval_sec = 20
 	answer_dict = {}
- 
-	# import prompt/personas.csv and get the output_schema values for the persona
-	prompts_df = pd.read_csv('./prompts/personas.csv')
-	prompts_df = prompts_df[prompts_df['persona'] == persona]
-	output_schema = prompts_df['output_schema'].iloc[0]
-	#output_schema[1:len(output_schema)-1])
-	json_schema = json.loads(output_schema[1:len(output_schema)-1]) #keys(['reasoning', 'message', 'action'])
+
+	# import prompt/personas.json and get the output_schema values for the persona
+	with open('./prompts/personas.json', 'r') as file:
+		data = json.load(file)
+	json_schema = data[persona]['output_schema']
+	#print(json_schema)
 	
 	if model == 'gpt-4-1106-preview':
 		kwargs['response_format']={ "type": "json_object" }
@@ -405,175 +404,92 @@ def run_game(player_a_policy, player_b_policy, end_prob: float, fname: str, matr
 			os.remove(f"{output_dir}/{fname}.json")
 			logging(f"File {f'{output_dir}/{fname}.json'} deleted due to error.")
 
-def main():	
-	### Matrix for Bach or Stravinsky
-	matrix = [[(10,5), (0, 0)],
-			[(0,0), (5, 10)]]
-	### Modify matrix to suit needs
-	
-	# Game Parameters
-	end_prob = 0.001
-	max_game_rounds = 7
-	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
-	output_fname = f"vanilla-vs-exploiter-longer"
-
-	# Player A Parameters
-	model_a = 'gpt-4-1106-preview'
-	temperature_a = 0.3
-	player_a_name = "Alice"
-	player_a_role = "row"
-	player_a_persona = 'fair'
-	sys_prompt_substitutions_player_a = {} #Only need this if there are keys within the prompt you'd like to fill with a specified value
-	player_a_strategic_reasoning = False #By default, does not append strategic reasoning examples in other contexts to prompt
-	show_past_reasoning_player_a = True #Show reasoning from previous rounds
-	show_messages_player_a = True #Show messages from previous rounds
-	show_intended_actions_player_a = True #Show intended actions (private, not known to other player) at each stage of previous rounds
-	
-	# Player B Parameters
-	model_b = 'gpt-4-1106-preview'
-	temperature_b = 0.3
-	player_b_name = "Bob"
-	player_b_role = "column"
-	player_b_persona = 'exploiter'
-	sys_prompt_substitutions_player_b = {}
-	player_b_strategic_reasoning = False
-	show_past_reasoning_player_b = True
-	show_messages_player_b = True
-	show_intended_actions_player_b = True
-	
-	# Initialize policies. Deepcopies are made in run_game() to avoid 
-	player_a_policy = Policy(model_a, temperature_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_messages_player_a, show_intended_actions_player_a)
-	player_b_policy = Policy(model_b, temperature_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_messages_player_b, show_intended_actions_player_b)
-	
-	# Run games in parallel
-	num_games = 2
-	max_workers = 4
-
-	with ThreadPoolExecutor(max_workers=max_workers) as executor:
-		futures = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob = end_prob, fname=f"{output_fname}-{n}", matrix=matrix, max_game_rounds=max_game_rounds, total_message_rounds = total_message_rounds) for n in range(num_games)]
-
-if __name__ == "__main__":
-	main()
-
-
-
-"""
-class PlayerA(Policy):
-    def __init__(self, model, temperature, name, persona, config):
-        role = config["player_a_parameters"]["role"]
-        strategic_reasoning = config["player_a_parameters"]["strategic_reasoning"]
-        sys_prompt_substitutions = {}
-        show_past_reasoning = config["player_a_parameters"]["show_past_reasoning"]
-        show_messages = config["player_a_parameters"]["show_messages"]
-        show_intended_actions = config["player_a_parameters"]["show_intended_actions"]
-        
-        super().__init__(model, temperature, name, role, persona,
-                         strategic_reasoning, sys_prompt_substitutions,
-                         show_past_reasoning, show_messages, show_intended_actions)
-
-class PlayerB(Policy):
-    def __init__(self, model, temperature, name, persona, config):
-        role = config["player_b_parameters"]["role"]
-        strategic_reasoning = config["player_b_parameters"]["strategic_reasoning"]
-        sys_prompt_substitutions = {}
-        show_past_reasoning = config["player_b_parameters"]["show_past_reasoning"]
-        show_messages = config["player_b_parameters"]["show_messages"]
-        show_intended_actions = config["player_b_parameters"]["show_intended_actions"]
-        
-        super().__init__(model, temperature, name, role, persona,
-                         strategic_reasoning, sys_prompt_substitutions,
-                         show_past_reasoning, show_messages, show_intended_actions)
-
-def main():	
-	### Matrix for Bach or Stravinsky
-	matrix = [[(10,5), (0, 0)],
-			[(0,0), (5, 10)]]
-	### Modify matrix to suit needs
-	
-	# Game Parameters
-	end_prob = 0.001
-	max_game_rounds = 7
-	total_message_rounds = 3 # One or more or zero "message_rounds" in each round in a game
-	output_fname = f"vanilla-vs-exploiter-longer"
-
-	# Player A Parameters
-	model_a = 'gpt-4-1106-preview'
-	temperature_a = 0.3
-	player_a_name = "Alice"
-	player_a_role = "row"
-	player_a_persona = 'vanilla'
-	sys_prompt_substitutions_player_a = {} #Only need this if there are keys within the prompt you'd like to fill with a specified value
-	player_a_strategic_reasoning = False #By default, does not append strategic reasoning examples in other contexts to prompt
-	show_past_reasoning_player_a = True #Show reasoning from previous rounds
-	show_messages_player_a = True #Show messages from previous rounds
-	show_intended_actions_player_a = True #Show intended actions (private, not known to other player) at each stage of previous rounds
-	
-	# Player B Parameters
-	model_b = 'gpt-4-1106-preview'
-	temperature_b = 0.3
-	player_b_name = "Bob"
-	player_b_role = "column"
-	player_b_persona = 'exploiter'
-	sys_prompt_substitutions_player_b = {}
-	player_b_strategic_reasoning = False
-	show_past_reasoning_player_b = True
-	show_messages_player_b = True
-	show_intended_actions_player_b = True
-	
-	# Initialize policies. Deepcopies are made in run_game() to avoid 
-	player_a_policy = Policy(model_a, temperature_a, player_a_name, player_b_name, player_a_role, player_a_persona, player_a_strategic_reasoning, sys_prompt_substitutions_player_a, show_past_reasoning_player_a, show_messages_player_a, show_intended_actions_player_a)
-	player_b_policy = Policy(model_b, temperature_b, player_b_name, player_a_name, player_b_role, player_b_persona, player_b_strategic_reasoning, sys_prompt_substitutions_player_b, show_past_reasoning_player_b, show_messages_player_b, show_intended_actions_player_b)
-	
-	# Run games in parallel
-	num_games = 2
-	max_workers = 4
-
-	with ThreadPoolExecutor(max_workers=max_workers) as executor:
-		futures = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob = end_prob, fname=f"{output_fname}-{n}", matrix=matrix, max_game_rounds=max_game_rounds, total_message_rounds = total_message_rounds) for n in range(num_games)]
-
 def main(config, cli_args):
-	# Extract and override parameters from config using CLI arguments
-	# Instantiate PlayerA and PlayerB using the parameters and the config
-	player_a_policy = PlayerA(cli_args.model_a or config["player_a_parameters"]["model"],
-							cli_args.temperature_a or config["player_a_parameters"]["temperature"],
-							cli_args.player_a_name or config["player_a_parameters"]["name"],
-							cli_args.player_a_persona or config["player_a_parameters"]["persona"],
-							config)
+	# Instantiate Policy directly for both players using parameters from CLI or config
+	player_a_policy = Policy(cli_args.model_a or config["player_a_parameters"]["model"],
+								cli_args.temperature_a or config["player_a_parameters"]["temperature"],
+								cli_args.player_a_name or config["player_a_parameters"]["name"],
+								cli_args.a_opponent_name or config["player_b_parameters"]["name"],
+								cli_args.player_a_role or config["player_a_parameters"]["role"],
+								cli_args.player_a_persona or config["player_a_parameters"]["persona"],
+								cli_args.player_a_strategic_reasoning or config["player_a_parameters"]["strategic_reasoning"],
+								cli_args.sys_prompt_substitutions_a or config["player_a_parameters"]["sys_prompt_substitutions"],
+								cli_args.show_past_reasoning_player_a or config["player_a_parameters"]["show_past_reasoning"],
+								cli_args.show_messages_player_a or config["player_a_parameters"]["show_messages"],
+								cli_args.show_intended_actions_player_a or config["player_a_parameters"]["show_intended_actions"])
 
-	player_b_policy = PlayerB(cli_args.model_b or config["player_b_parameters"]["model"],
-							cli_args.temperature_b or config["player_b_parameters"]["temperature"],
-							cli_args.player_b_name or config["player_b_parameters"]["name"],
-							cli_args.player_b_persona or config["player_b_parameters"]["persona"],
-							config)
+	player_b_policy = Policy(cli_args.model_b or config["player_b_parameters"]["model"],
+								cli_args.temperature_b or config["player_b_parameters"]["temperature"],
+								cli_args.player_b_name or config["player_b_parameters"]["name"],
+								cli_args.b_opponent_name or config["player_a_parameters"]["name"],
+								cli_args.player_b_role or config["player_b_parameters"]["role"],
+								cli_args.player_b_persona or config["player_b_parameters"]["persona"],
+								cli_args.player_b_strategic_reasoning or config["player_b_parameters"]["strategic_reasoning"],
+								cli_args.sys_prompt_substitutions_b or config["player_b_parameters"]["sys_prompt_substitutions"],
+								cli_args.show_past_reasoning_player_b or config["player_b_parameters"]["show_past_reasoning"],
+								cli_args.show_messages_player_b or config["player_b_parameters"]["show_messages"],
+								cli_args.show_intended_actions_player_b or config["player_b_parameters"]["show_intended_actions"])
 
-	### Matrix for Bach or Stravinsky
-	matrix = [[(10,5), (0, 0)], 
-			[(0,0), (5, 10)]]
- 	### Modify matrix to suit needs
 
-	with ThreadPoolExecutor(max_workers=cli_args.max_workers) as executor:
-		futures = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob = cli_args.end_prob, fname=f"{cli_args.output_fname}-{n}", matrix=matrix, max_game_rounds=cli_args.max_game_rounds, total_message_rounds = cli_args.total_message_rounds) for n in range(cli_args.num_games)]
-    
+	# Game parameters from CLI or config
+	matrix = cli_args.matrix or config["game_parameters"]['game_matrix']
+	max_game_rounds = cli_args.max_game_rounds or config["game_parameters"]["max_game_rounds"]
+	total_message_rounds = cli_args.total_message_rounds or config["game_parameters"]["total_message_rounds"]
+	end_prob = cli_args.end_prob or config["game_parameters"]["end_prob"]
+	output_fname = cli_args.output_fname or config["game_parameters"]["output_fname"]
+
+	# Execution parameters from CLI or config
+	num_games = cli_args.num_games or config["execution_parameters"]["num_games"]
+	max_workers = cli_args.max_workers or config["execution_parameters"]["max_workers"]
+
+	# Parallel processing
+	with ThreadPoolExecutor(max_workers=max_workers) as executor:
+		futures = [executor.submit(run_game, player_a_policy, player_b_policy, end_prob=end_prob, fname=f"{output_fname}-{n}", matrix=matrix, max_game_rounds=max_game_rounds, total_message_rounds=total_message_rounds) for n in range(num_games)]
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description='Run a game simulation between two players.')
-	parser.add_argument('--config', type=str, required=True, help='Path to the configuration file.')
-	# Define other CLI arguments for PlayerA and PlayerB
-	
 
-	# Common parameters for both players
-	parser.add_argument('--total_message_rounds', type=int, help='Total message rounds in each game round (overrides config).')
-	parser.add_argument('--max_game_rounds', type=int, help='Maximum game rounds (overrides config).')
-	parser.add_argument('--num_games', type=int, help='Number of games to run in parallel (overrides config).')
-	parser.add_argument('--end_prob', type=float, help='Game end probability (overrides config).')
-	parser.add_argument('--output_fname', type=str, help='Base filename for output files (overrides config).')
+	# Player A CLI arguments
+	parser.add_argument('--model_a', type=str, help='Model for Player A.')
+	parser.add_argument('--temperature_a', type=float, help='Temperature for Player A.')
+	parser.add_argument('--player_a_name', type=str, help='Name of Player A.')
+	parser.add_argument('--player_a_persona', type=str, help='Persona of Player A.')
+	parser.add_argument('--a_opponent_name', type=str, help="Name of Player A's opponent")
+	parser.add_argument('--player_a_role', type=str, help='Role of Player A.')
+	parser.add_argument('--player_a_strategic_reasoning', type=bool, help='Strategic reasoning for Player A.')
+	parser.add_argument('--show_past_reasoning_player_a', type=bool, help='Show past reasoning for Player A.')
+	parser.add_argument('--show_messages_player_a', type=bool, help='Show messages for Player A.')
+	parser.add_argument('--show_intended_actions_player_a', type=bool, help='Show intended actions for Player A.')
+	parser.add_argument('--sys_prompt_substitutions_a', type=json.loads, help='System prompt substitutions for Player A.') #Enter JSON string, e.g. '{"key1": "value1", "key2": "value2"}'
+
+	# Player B CLI arguments
+	parser.add_argument('--model_b', type=str, help='Model for Player B.')
+	parser.add_argument('--temperature_b', type=float, help='Temperature for Player B.')
+	parser.add_argument('--player_b_name', type=str, help='Name of Player B.')
+	parser.add_argument('--player_b_persona', type=str, help='Persona of Player B.')
+	parser.add_argument('--b_opponent_name', type=str, help="Name of Player B's opponent")
+	parser.add_argument('--player_b_role', type=str, help='Role of Player B.')
+	parser.add_argument('--player_b_strategic_reasoning', type=bool, help='Strategic reasoning for Player B.')
+	parser.add_argument('--show_past_reasoning_player_b', type=bool, help='Show past reasoning for Player B.')
+	parser.add_argument('--show_messages_player_b', type=bool, help='Show messages for Player B.')
+	parser.add_argument('--show_intended_actions_player_b', type=bool, help='Show intended actions for Player B.')
+	parser.add_argument('--sys_prompt_substitutions_b', type=json.loads, help='System prompt substitutions for Player B.')
+
+	# Game parameters
+	parser.add_argument('--matrix', type=json.loads, help='Game matrix.') #Enter list of lists of lists, e.g. '[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]'
+	parser.add_argument('--total_message_rounds', type=int, help='Total message rounds in each game round.')
+	parser.add_argument('--num_games', type=int, help='Number of games to run in parallel.')
+	parser.add_argument('--end_prob', type=float, help='Game end probability.')
+	parser.add_argument('--output_fname', type=str, help='Base filename for output files.')
+
+	# Execution parameters
+	parser.add_argument('--config', type=str, required=True, help='Path to the configuration file.')
+	parser.add_argument('--max_game_rounds', type=int, help='Maximum game rounds.')
+	parser.add_argument('--max_workers', type=int, help='Maximum number of parallel workers.')
 
 	cli_args = parser.parse_args()
 
-	# Load the configuration file
 	with open(cli_args.config, 'r') as f:
 		config = json.load(f)
 
-	# Run the main function with the loaded config and CLI arguments
 	main(config, cli_args)
-"""

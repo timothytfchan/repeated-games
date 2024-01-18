@@ -1,0 +1,37 @@
+{
+    "game_parameters": {
+        "end_prob": 0.001,
+        "max_game_rounds": 7,
+        "total_message_rounds": 3,
+        "output_fname": "vanilla-vs-exploiter-longer",
+        "game_matrix": [[[10, 5], [0, 0]], [[0, 0], [5, 10]]]
+    },
+    "player_a_parameters": {
+        "model": "gpt-4-1106-preview",
+        "temperature": 0.3,
+        "name": "Alice",
+        "role": "row",
+        "persona": "vanilla",
+        "strategic_reasoning": false,
+        "show_past_reasoning": true,
+        "show_messages": true,
+        "show_intended_actions": true,
+        "sys_prompt_substitutions": {}
+    },
+    "player_b_parameters": {
+        "model": "gpt-4-1106-preview",
+        "temperature": 0.3,
+        "name": "Bob",
+        "role": "column",
+        "persona": "exploiter",
+        "strategic_reasoning": false,
+        "show_past_reasoning": true,
+        "show_messages": true,
+        "show_intended_actions": true,
+        "sys_prompt_substitutions": {}
+    },
+    "execution_parameters": {
+        "num_games": 2,
+        "max_workers": 4
+    }
+}
