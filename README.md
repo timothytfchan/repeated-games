@@ -16,6 +16,7 @@ Player A and B will play a game for max_game_rounds rounds unless the game prema
 Experiments are run from the main.py file. You can either provide experiment parameters in a config file (e.g. config.json) or input them through the command-line interface. For help run: `python main.py -help`
 
 Descriptions of parameters:
+```json
 {
     "game_parameters": {
         "end_prob": <float: the probability of ending the game at rounds before max_game_rounds>,
@@ -53,6 +54,7 @@ Descriptions of parameters:
         "max_workers": <int: the maximum number of threads that can be actively executing tasks simultaneously>
     }
 }
+```
 
 Custom personas can be added to the prompts/personas.json file.
 - At the top level, the names of personas are the keys
