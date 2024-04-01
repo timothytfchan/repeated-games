@@ -247,3 +247,55 @@ def calculate_punitiveness_integral(actual_utilities, reference_utilities, num_b
 
     return punitiveness, (lower_ci, upper_ci)
 
+def calculate_exploitability(actual_utilities, reference_utilities, num_bootstraps=1000):
+    """
+    Calculate the exploitability of player 1's policy in a set of games and its 95% confidence interval.
+    exploitability = sum(actual_total_utilities)/len(actual_total_utilities) - sum(reference_total_utilities)/len(reference_total_utilities)
+
+    :param actual_utilities: A list of lists of utilities for player 2 under their actual policy in each game.
+    :param reference_utilities: A list of lists of utilities for player 2 under the reference policy in each game.
+    :param num_bootstraps: The number of bootstrap samples to generate (default: 1000).
+    :return: The exploitability of player 1's policy by player 2 and its 95% confidence interval.
+    """
+    if (len(actual_utilities) == 0) or (len(reference_utilities) == 0):
+        return None, (None, None)
+    
+    total_rounds_actual = sum(len(game) for game in actual_utilities)
+    total_rounds_reference = sum(len(game) for game in reference_utilities)
+
+    actual_integral = sum(
+        sum(game) * (len(game) / total_rounds_actual)
+        for game in actual_utilities
+    )
+
+    reference_integral = sum(
+        sum(game) * (len(game) / total_rounds_reference)
+        for game in reference_utilities
+    )
+
+    exploitability = reference_integral - actual_integral
+    
+    # Bootstrap resampling
+    np.random.seed(420)
+    bootstrap_exploitability = []
+    for _ in range(num_bootstraps):
+        actual_bootstrap = [np.random.choice(game, size=len(game), replace=True) for game in actual_utilities]
+        reference_bootstrap = [np.random.choice(game, size=len(game), replace=True) for game in reference_utilities]
+
+        actual_bootstrap_integral = sum(
+            sum(game) * (len(game) / total_rounds_actual)
+            for game in actual_bootstrap
+        )
+
+        reference_bootstrap_integral = sum(
+            sum(game) * (len(game) / total_rounds_reference)
+            for game in reference_bootstrap
+        )
+
+        bootstrap_exploitability.append(reference_bootstrap_integral - actual_bootstrap_integral)
+
+    # Calculate 95% confidence interval
+    lower_ci = np.percentile(bootstrap_exploitability, 2.5)
+    upper_ci = np.percentile(bootstrap_exploitability, 97.5)
+
+    return exploitability, (lower_ci, upper_ci)
