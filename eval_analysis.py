@@ -21,7 +21,9 @@ def extract_punitiveness_from_eval_results(eval_results_files):
                     "focal_agent": eval_results["focal_agent"],
                     "punitiveness": eval_results["punitiveness"],
                     "lower_ci": eval_results["lower_ci"],
-                    "upper_ci": eval_results["upper_ci"]
+                    "upper_ci": eval_results["upper_ci"],
+                    "n_actual_utilities": eval_results["n_actual_utilities"],
+                    "n_reference_utilities": eval_results["n_reference_utilities"]
                 })
     # save the data in a pandas dataframe and save to csv
     df = pd.DataFrame(data)
@@ -32,13 +34,13 @@ def plot_punitiveness_bar_chart(eval_results_files, save_path="punitiveness_bar_
     df = extract_punitiveness_from_eval_results(eval_results_files)    
     # Calculate error margins as previously described
     df = df.reset_index(drop=True)
+    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
+    df = df.sort_values("experiment_name")
+    
     df['error_lower'] = df['punitiveness'] - df['lower_ci']
     df['error_upper'] = df['upper_ci'] - df['punitiveness']
     yerr = df[['error_lower', 'error_upper']].T.values
     yerr = [df['punitiveness'] - df['lower_ci'], df['upper_ci'] - df['punitiveness']]
-
-    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
-    df = df.sort_values("experiment_name")
 
     plt.figure(figsize=(20, 16))  # Increase the figure width plt.figure(figsize=(10, 6))
     ax = sns.barplot(x="experiment_name", y="punitiveness", data=df, yerr=yerr, capsize=0.2) #
@@ -69,7 +71,9 @@ def extract_exploitability_from_eval_results(eval_results_files):
                     "focal_agent": eval_results["focal_agent"],
                     "exploitability": eval_results["exploitability"],
                     "lower_ci": eval_results["lower_ci"],
-                    "upper_ci": eval_results["upper_ci"]
+                    "upper_ci": eval_results["upper_ci"],
+                    "n_actual_utilities": eval_results["n_actual_utilities"],
+                    "n_reference_utilities": eval_results["n_reference_utilities"]
                 })
     df = pd.DataFrame(data)
     df.to_csv("exploitability_debug.csv", index=False)
@@ -78,11 +82,12 @@ def extract_exploitability_from_eval_results(eval_results_files):
 def plot_exploitability_bar_chart(eval_results_files, save_path="exploitability_bar_chart.png"):
     df = extract_exploitability_from_eval_results(eval_results_files)
     df = df.reset_index(drop=True)
+    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
+    df = df.sort_values("experiment_name")
+    
     df['error_lower'] = df['exploitability'] - df['lower_ci']
     df['error_upper'] = df['upper_ci'] - df['exploitability']
     yerr = [df['exploitability'] - df['lower_ci'], df['upper_ci'] - df['exploitability']]
-    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
-    df = df.sort_values("experiment_name")
     plt.figure(figsize=(20, 16))
     ax = sns.barplot(x="experiment_name", y="exploitability", data=df, yerr=yerr, capsize=0.2)
     plt.xlabel("Experiment Name")
@@ -91,6 +96,23 @@ def plot_exploitability_bar_chart(eval_results_files, save_path="exploitability_
     plt.xticks(rotation=90, ha="right")
     plt.ylim(-50, 100)
     plt.tick_params(axis='x', which='major', pad=15)
+    
+    # Adjusted code for annotating sample sizes
+    for bar, n_act, n_ref in zip(ax.patches, df['n_actual_utilities'], df['n_reference_utilities']):
+        # Calculate the height to determine the position of the annotation
+        height = max(bar.get_height(), 0)  # Use 0 as minimum to avoid negative values
+        
+        # Position the annotation just above the bar or at the bottom if the height is too low
+        text_y_position = height if height > 10 else 10
+        
+        # Annotate with the sample sizes
+        ax.annotate(f'n_act: {n_act}\nn_ref: {n_ref}',
+                    xy=(bar.get_x() + bar.get_width() / 2, text_y_position),
+                    xytext=(0, 3),  # 3 points vertical offset from the top of the bar
+                    textcoords="offset points",
+                    ha='center', va='bottom',
+                    fontsize=6)  # You can adjust the font size as needed
+    
     plt.tight_layout()
     plt.savefig(save_path)
 
@@ -152,7 +174,7 @@ def plot_punitiveness_vs_exploitability(punitiveness_eval_results_files, exploit
         arrowprops = dict(arrowstyle='->', connectionstyle='arc3,rad=0', shrinkA=0, shrinkB=shrink)
 
         ax.annotate(label, xy=(x, y), xytext=xytext, textcoords='offset points',
-                    arrowprops=arrowprops, fontsize=8, ha=ha, va=va)
+                    arrowprops=arrowprops, fontsize=6, ha=ha, va=va)
 
     # Save the plot
     plt.tight_layout()
@@ -161,38 +183,61 @@ def plot_punitiveness_vs_exploitability(punitiveness_eval_results_files, exploit
 def plot_punitiveness_bar_chart(eval_results_files, save_path="punitiveness_bar_chart.png"):
     df = extract_punitiveness_from_eval_results(eval_results_files)    
     df = df.reset_index(drop=True)
+    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
+    df = df.sort_values("experiment_name")
+    
     df['error_lower'] = df['punitiveness'] - df['lower_ci']
     df['error_upper'] = df['upper_ci'] - df['punitiveness']
     yerr = [df['punitiveness'] - df['lower_ci'], df['upper_ci'] - df['punitiveness']]
-    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
-    df = df.sort_values("experiment_name")
-    plt.figure(figsize=(20, 16))
-    ax = sns.barplot(x="experiment_name", y="punitiveness", data=df, yerr=yerr, capsize=0.2)
+
+    plt.figure(figsize=(25, 20))
+    ax = sns.barplot(x="experiment_name", y="punitiveness", data=df, yerr=yerr, capsize=0.2, hue="focal_agent_model")
     plt.xlabel("Experiment Name")
     plt.ylabel("Punitiveness")
     plt.title(f"Punitiveness of {df['focal_agent'].iloc[0]}")
     plt.xticks(rotation=90, ha="right")
     plt.yscale('symlog')  # Set the y-axis to symlog scale
     plt.tick_params(axis='x', which='major', pad=15)
+    
+    # Annotating sample sizes
+    for bar, n_act, n_ref in zip(ax.patches, df['n_actual_utilities'], df['n_reference_utilities']):
+        height = bar.get_height()
+        ax.annotate(f'n_act: {n_act}\nn_ref: {n_ref}',
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),  # 3 points vertical offset
+                    textcoords="offset points",
+                    ha='center', va='bottom', fontsize=6)
+    
     plt.tight_layout()
     plt.savefig(save_path)
 
 def plot_exploitability_bar_chart(eval_results_files, save_path="exploitability_bar_chart.png"):
     df = extract_exploitability_from_eval_results(eval_results_files)
     df = df.reset_index(drop=True)
+    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
+    df = df.sort_values("experiment_name")
     df['error_lower'] = df['exploitability'] - df['lower_ci']
     df['error_upper'] = df['upper_ci'] - df['exploitability']
     yerr = [df['exploitability'] - df['lower_ci'], df['upper_ci'] - df['exploitability']]
-    df['experiment_name'] = df['focal_agent_model'] + ' - ' + df['experiment_name']
-    df = df.sort_values("experiment_name")
-    plt.figure(figsize=(20, 16))
-    ax = sns.barplot(x="experiment_name", y="exploitability", data=df, yerr=yerr, capsize=0.2)
+
+    plt.figure(figsize=(25, 20))
+    ax = sns.barplot(x="experiment_name", y="exploitability", data=df, yerr=yerr, capsize=0.2, hue="focal_agent_model")
     plt.xlabel("Experiment Name")
     plt.ylabel("Exploitability")
     plt.title(f"Exploitability of {df['focal_agent'].iloc[0]}")
     plt.xticks(rotation=90, ha="right")
     plt.yscale('symlog')  # Set the y-axis to symlog scale
     plt.tick_params(axis='x', which='major', pad=15)
+    
+    # Annotating sample sizes
+    for bar, n_act, n_ref in zip(ax.patches, df['n_actual_utilities'], df['n_reference_utilities']):
+        height = bar.get_height()
+        ax.annotate(f'n_act: {n_act}\nn_ref: {n_ref}',
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),  # 3 points vertical offset
+                    textcoords="offset points",
+                    ha='center', va='bottom', fontsize=6)
+    
     plt.tight_layout()
     plt.savefig(save_path)
 
@@ -206,8 +251,8 @@ def plot_punitiveness_vs_exploitability(punitiveness_eval_results_files, exploit
     # Save merged_df to debug
     merged_df.to_csv("punitiveness_vs_exploitability_debug.csv", index=False)
     
-    plt.figure(figsize=(12, 10))
-    ax = sns.scatterplot(x='punitiveness', y='exploitability', data=merged_df)
+    plt.figure(figsize=(25, 20))
+    ax = sns.scatterplot(x='punitiveness', y='exploitability', data=merged_df, hue='focal_agent_model')
     plt.xlabel("Punitiveness")
     plt.ylabel("Exploitability")
     plt.title(f"Punitiveness vs Exploitability of {merged_df['focal_agent'].iloc[0]}")
@@ -237,7 +282,7 @@ def plot_punitiveness_vs_exploitability(punitiveness_eval_results_files, exploit
         shrink = 5 + distance * 0.1
         arrowprops = dict(arrowstyle='->', connectionstyle='arc3,rad=0', shrinkA=0, shrinkB=shrink)
         ax.annotate(label, xy=(x, y), xytext=xytext, textcoords='offset points',
-                    arrowprops=arrowprops, fontsize=8, ha=ha, va=va)
+                    arrowprops=arrowprops, fontsize=6, ha=ha, va=va)
     plt.tight_layout()
     plt.savefig(save_path)
 

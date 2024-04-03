@@ -247,6 +247,44 @@ def calculate_punitiveness_integral(actual_utilities, reference_utilities, num_b
 
     return punitiveness, (lower_ci, upper_ci)
 
+def calculate_punitiveness_integral(actual_utilities, reference_utilities, num_bootstraps=1000):
+    """
+    Calculate the punitiveness of player 1's policy across all games merged together and its 95% confidence interval.
+    
+    :param actual_utilities: A list of lists of utilities for player 1 under their actual policy in each game.
+    :param reference_utilities: A list of lists of utilities for player 1 under the reference policy in each game.
+    :param num_bootstraps: The number of bootstrap samples to generate (default: 1000).
+    :return: The punitiveness of player 1's policy across all games and its 95% confidence interval.
+    """
+    if not actual_utilities or not reference_utilities:
+        return None, (None, None), (None, None)
+    
+    # Flatten the list of utilities to merge data points from all games
+    merged_actual_utilities = np.concatenate(actual_utilities)
+    merged_reference_utilities = np.concatenate(reference_utilities)
+    
+    # Calculate punitiveness as the difference in integrals
+    total_rounds = len(merged_actual_utilities)
+    actual_integral = np.sum(merged_actual_utilities) / total_rounds
+    reference_integral = np.sum(merged_reference_utilities) / total_rounds
+    punitiveness = actual_integral - reference_integral
+    
+    # Bootstrap resampling for confidence interval
+    bootstrap_punitiveness = []
+    for _ in range(num_bootstraps):
+        bootstrap_actual = np.random.choice(merged_actual_utilities, size=len(merged_actual_utilities), replace=True)
+        bootstrap_reference = np.random.choice(merged_reference_utilities, size=len(merged_reference_utilities), replace=True)
+        
+        actual_bootstrap_integral = np.sum(bootstrap_actual) / total_rounds
+        reference_bootstrap_integral = np.sum(bootstrap_reference) / total_rounds
+        
+        bootstrap_punitiveness.append(actual_bootstrap_integral - reference_bootstrap_integral)
+
+    # Calculate 95% confidence interval
+    lower_ci, upper_ci = np.percentile(bootstrap_punitiveness, [2.5, 97.5])
+    
+    return punitiveness, (lower_ci, upper_ci), (len(merged_actual_utilities), len(merged_reference_utilities))
+
 def calculate_exploitability(actual_utilities, reference_utilities, num_bootstraps=1000):
     """
     Calculate the exploitability of player 1's policy in a set of games and its 95% confidence interval.
@@ -299,3 +337,37 @@ def calculate_exploitability(actual_utilities, reference_utilities, num_bootstra
     upper_ci = np.percentile(bootstrap_exploitability, 97.5)
 
     return exploitability, (lower_ci, upper_ci)
+
+def calculate_exploitability(actual_utilities, reference_utilities, num_bootstraps=1000):
+    """
+    Calculate the exploitability of player 1's policy across all games merged together and its 95% confidence interval.
+    Exploitability is calculated as the difference in average utilities between the actual policy and the reference policy.
+    
+    :param actual_utilities: A list of lists of utilities for player 2 under their actual policy in each game.
+    :param reference_utilities: A list of lists of utilities for player 2 under the reference policy in each game.
+    :param num_bootstraps: The number of bootstrap samples to generate (default: 1000).
+    :return: The exploitability of player 1's policy across all games and its 95% confidence interval.
+    """
+    if not actual_utilities or not reference_utilities:
+        return None, (None, None), (None, None)
+    
+    # Flatten the list of utilities for both actual and reference to merge data points from all games
+    merged_actual_utilities = np.concatenate(actual_utilities)
+    merged_reference_utilities = np.concatenate(reference_utilities)
+    
+    # Calculate exploitability as the difference in mean utilities
+    exploitability = np.mean(merged_reference_utilities) - np.mean(merged_actual_utilities)
+    
+    # Bootstrap resampling for confidence interval
+    bootstrap_differences = []
+    for _ in range(num_bootstraps):
+        bootstrap_actual = np.random.choice(merged_actual_utilities, size=len(merged_actual_utilities), replace=True)
+        bootstrap_reference = np.random.choice(merged_reference_utilities, size=len(merged_reference_utilities), replace=True)
+        
+        bootstrap_difference = np.mean(bootstrap_reference) - np.mean(bootstrap_actual)
+        bootstrap_differences.append(bootstrap_difference)
+    
+    # Calculate 95% confidence interval
+    lower_ci, upper_ci = np.percentile(bootstrap_differences, [2.5, 97.5])
+    
+    return exploitability, (lower_ci, upper_ci), (len(merged_actual_utilities), len(merged_reference_utilities))

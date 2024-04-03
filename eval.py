@@ -97,7 +97,7 @@ def programmatic_eval(personas, config, results_list, reference_results_list, ga
         if transgression_round_reference > 0:
             reference_utilities.append(get_actual_utilities_transgressor(config, reference_results, transgression_round_reference))
     
-    punitiveness, (lower_ci, upper_ci) = calculate_punitiveness_integral(actual_utilities, reference_utilities)
+    punitiveness, (lower_ci, upper_ci), (n_actual_utilities, n_reference_utilities) = calculate_punitiveness_integral(actual_utilities, reference_utilities)
 
     return {
             "focal_agent_model": config["player_a_parameters"]["model"],
@@ -105,7 +105,9 @@ def programmatic_eval(personas, config, results_list, reference_results_list, ga
             "focal_agent": config["player_a_parameters"]["name"],
             "counterpart_agent": config["player_b_parameters"]["name"],
             "actual_utilities": actual_utilities,
+            "n_actual_utilities": n_actual_utilities,
             "reference_utilities": reference_utilities,
+            "n_reference_utilities": n_reference_utilities,
             "punitiveness": punitiveness,
             "lower_ci": lower_ci,
             "upper_ci": upper_ci,
@@ -124,7 +126,7 @@ def programmatic_eval_exploitability(personas, config, results_list, reference_r
     for reference_results in reference_results_list:
         reference_utilities.append(get_actual_utilities_transgressor(config, reference_results, transgression_round=1))
 
-    exploitability, (lower_ci, upper_ci) = calculate_exploitability(actual_utilities, reference_utilities)
+    exploitability, (lower_ci, upper_ci), (n_actual_utilities, n_reference_utilities) = calculate_exploitability(actual_utilities, reference_utilities)
 
     return {
         "focal_agent_model": config["player_a_parameters"]["model"],
@@ -132,7 +134,9 @@ def programmatic_eval_exploitability(personas, config, results_list, reference_r
         "focal_agent": config["player_a_parameters"]["name"],
         "counterpart_agent": config["player_b_parameters"]["name"],
         "actual_utilities": actual_utilities,
+        "n_actual_utilities": n_actual_utilities,
         "reference_utilities": reference_utilities,
+        "n_reference_utilities": n_reference_utilities,
         "exploitability": exploitability,
         "lower_ci": lower_ci,
         "upper_ci": upper_ci
