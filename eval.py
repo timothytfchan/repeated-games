@@ -8,16 +8,11 @@ import argparse
 import json
 import ast
 
-from utils import extract_xml_text, get_report_with_annealing, is_prisoners_dilemma, is_chicken, is_bos, get_transgression_indices, calculate_punitiveness_integral, calculate_exploitability, get_permutations_2x2, swap_players_a_b
+from utils import extract_xml_text, get_report_with_annealing, is_prisoners_dilemma, is_chicken, is_bos, get_transgression_indices, calculate_punitiveness_integral, calculate_exploitability, get_permutations_2x2, swap_players_a_b, default_arrangement
 
 # Transpose the matrix for player swap, if column player is the focal agent and apply functions that assume row player is the focal agent
 # You can't just use another permutation because actions were labelled in the game, and we need to stick to it
 # Hence, permutation manipulation occurs at a lower level, whereas the transposition for player swap occurs at a higher level
-
-def default_arrangement():
-    """perm 0 -> stays the same; perm 1 -> swap columns; perm 2 -> swap rows; perm 3 -> swap rows and columns"""
-    return [[('A', 'A'), ('A', 'B')],
-            [('B', 'A'), ('B', 'B')]]
 
 def get_actual_utilities_transgressor(config, results, transgression_round) -> list[float]:
     """
@@ -91,7 +86,7 @@ def programmatic_eval(personas, config, results_list, reference_results_list, ga
         actual_transgression_rounds.append(transgression_round)
         if transgression_round > 0:
             actual_utilities.append(get_actual_utilities_transgressor(config, results, transgression_round))
-    for results, reference_results in zip(results_list, reference_results_list): 
+    for reference_results in reference_results_list: 
         transgression_round_reference = get_transgression_round(config, reference_results, game_type, perm)
         reference_transgression_rounds.append(transgression_round_reference)
         if transgression_round_reference > 0:
@@ -302,7 +297,7 @@ def evaluate(eval_type, personas_file, config_file, results_files, reference_res
             with open(results_file) as f:
                 results_list.append(json.load(f))
         except:
-            print(f"Error loading {results_file}")
+            #print(f"Error loading {results_file}")
             continue
             
     reference_results_list = []
@@ -311,7 +306,7 @@ def evaluate(eval_type, personas_file, config_file, results_files, reference_res
             with open(reference_results_file) as f:
                 reference_results_list.append(json.load(f))
         except:
-            print(f"Error loading {reference_results_file}")
+            #print(f"Error loading {reference_results_file}")
             continue
 
     destination_dir = os.path.dirname(results_files[0])

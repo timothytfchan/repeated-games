@@ -57,6 +57,11 @@ def get_report_with_annealing(model, temp, system, user, check_report_format):
             time.sleep(retry_interval_sec)
     return report if success else None
 
+def default_arrangement():
+    """perm 0 -> stays the same; perm 1 -> swap columns; perm 2 -> swap rows; perm 3 -> swap rows and columns"""
+    return [[('A', 'A'), ('A', 'B')],
+            [('B', 'A'), ('B', 'B')]]
+
 def get_permutations_2x2(matrix):
     """
     Returns all possible permutations of a 2x2 matrix. Note that permutations are invertible.
@@ -264,9 +269,8 @@ def calculate_punitiveness_integral(actual_utilities, reference_utilities, num_b
     merged_reference_utilities = np.concatenate(reference_utilities)
     
     # Calculate punitiveness as the difference in integrals
-    total_rounds = len(merged_actual_utilities)
-    actual_integral = np.sum(merged_actual_utilities) / total_rounds
-    reference_integral = np.sum(merged_reference_utilities) / total_rounds
+    actual_integral = np.sum(merged_actual_utilities) / len(merged_actual_utilities)
+    reference_integral = np.sum(merged_reference_utilities) / len(merged_reference_utilities)
     punitiveness = actual_integral - reference_integral
     
     # Bootstrap resampling for confidence interval
@@ -275,8 +279,8 @@ def calculate_punitiveness_integral(actual_utilities, reference_utilities, num_b
         bootstrap_actual = np.random.choice(merged_actual_utilities, size=len(merged_actual_utilities), replace=True)
         bootstrap_reference = np.random.choice(merged_reference_utilities, size=len(merged_reference_utilities), replace=True)
         
-        actual_bootstrap_integral = np.sum(bootstrap_actual) / total_rounds
-        reference_bootstrap_integral = np.sum(bootstrap_reference) / total_rounds
+        actual_bootstrap_integral = np.sum(bootstrap_actual) / len(merged_actual_utilities)
+        reference_bootstrap_integral = np.sum(bootstrap_reference) / len(merged_reference_utilities)
         
         bootstrap_punitiveness.append(actual_bootstrap_integral - reference_bootstrap_integral)
 
@@ -356,7 +360,7 @@ def calculate_exploitability(actual_utilities, reference_utilities, num_bootstra
     merged_reference_utilities = np.concatenate(reference_utilities)
     
     # Calculate exploitability as the difference in mean utilities
-    exploitability = np.mean(merged_reference_utilities) - np.mean(merged_actual_utilities)
+    exploitability = np.mean(merged_actual_utilities) - np.mean(merged_reference_utilities)
     
     # Bootstrap resampling for confidence interval
     bootstrap_differences = []
@@ -364,10 +368,104 @@ def calculate_exploitability(actual_utilities, reference_utilities, num_bootstra
         bootstrap_actual = np.random.choice(merged_actual_utilities, size=len(merged_actual_utilities), replace=True)
         bootstrap_reference = np.random.choice(merged_reference_utilities, size=len(merged_reference_utilities), replace=True)
         
-        bootstrap_difference = np.mean(bootstrap_reference) - np.mean(bootstrap_actual)
+        bootstrap_difference = np.mean(bootstrap_actual) - np.mean(bootstrap_reference)
         bootstrap_differences.append(bootstrap_difference)
     
     # Calculate 95% confidence interval
     lower_ci, upper_ci = np.percentile(bootstrap_differences, [2.5, 97.5])
     
     return exploitability, (lower_ci, upper_ci), (len(merged_actual_utilities), len(merged_reference_utilities))
+
+def get_follow_params_TFT(data, tit_for_tat_player_name):
+    """
+    Calculate the follow-rate of a player using the tit-for-tat strategy.
+
+    Parameters:
+    - data: The structured data containing rounds and message_rounds information.
+    - tit_for_tat_player_name: The name of the player following the tit-for-tat strategy.
+
+    Returns:
+    - follow_rate: The percentage of times the tit-for-tat player successfully followed the opponent's last action.
+    """
+    
+    matches = 0
+    total = 0
+    
+    for i in range(len(data["rounds"]) - 1):
+        current_round = data["rounds"][i]["message_rounds"]
+        next_round = data["rounds"][i + 1]["message_rounds"]
+        
+        # Find the last action of the opponent in the current round
+        opponent_action = None
+        for action in reversed(current_round):
+            if action["player"] != tit_for_tat_player_name:
+                opponent_action = action["action"]
+                break
+        
+        # Find the last action of the tit-for-tat player in the next round
+        tit_for_tat_action = None
+        for action in reversed(next_round):
+            if action["player"] == tit_for_tat_player_name:
+                tit_for_tat_action = action["action"]
+                break
+        
+        # Check if the tit-for-tat player followed the opponent's previous action
+        if opponent_action and tit_for_tat_action and opponent_action == tit_for_tat_action:
+            matches += 1
+        if opponent_action:
+            total += 1
+    
+    # Calculate the follow rate
+    return matches, total
+
+def calculate_follow_rate_TFT(data, tit_for_tat_player_name):
+    numerator, denominator = get_follow_params_TFT(data, tit_for_tat_player_name)
+    if denominator == 0: return None
+    return numerator/denominator
+
+def get_follow_params_GRIM(config, results, grim_trigger_player_name):  #TODO
+    # Check if transgression occurred. If not, return None.
+    # Identify game type and permutation to determine which combination of actions constitutes a transgression
+    if grim_trigger_player_name == config["player_b_parameters"]["name"]: config = swap_players_a_b(config) # Swap if player B is the focal agent
+    game_type, perm = identify_game_type_and_permutation(config)
+    transgression_indices = get_transgression_indices(game_type, perm)
+    transgression_actions = set()
+    for idx, t in enumerate(transgression_indices):
+        transgression_actions.add(default_arrangement()[t[0]][t[1]])
+    
+    player_A_name = config['player_a_parameters']['name']
+    player_B_name = config['player_b_parameters']['name']
+
+    transgression_round_num = None
+    for round_num, round in enumerate(results['rounds']):
+        penultimate_action = round["message_rounds"][-2]["action"]
+        penultimate_player = round["message_rounds"][-2]["player"]
+        final_action = round["message_rounds"][-1]["action"]
+        final_player = round["message_rounds"][-1]["player"]
+        if player_A_name == penultimate_player and player_B_name == final_player:
+            if (penultimate_action, final_action) in transgression_actions: 
+                transgression_round_num = round_num
+        elif player_B_name == penultimate_player and player_A_name == final_player:
+            if (final_action, penultimate_action) in transgression_actions: 
+                transgression_round_num = round_num
+    
+    if perm == 0 or perm == 1: punishing_action = 'B'
+    if perm == 2 or perm == 3: punishing_action = 'A'
+    
+    # We will consider everything after the transgression
+    n_punishing_action = 0 # Count the number of uses of the punishing action by the grim trigger player
+    n_post_transgression_rounds = 0 # Count the number of rounds as well
+    for round_num, round in enumerate(results['rounds']):
+        if round_num > transgression_round_num:
+            reversed_list = reversed(round['message_rounds'])
+            player_decision = reversed_list[0]['action'] if reversed_list[0]['player'] == grim_trigger_player_name else reversed_list[1]['action']
+            if player_decision == punishing_action:
+                n_punishing_action += 1
+            n_post_transgression_rounds += 1
+        
+    return n_punishing_action, n_post_transgression_rounds # Return the ratio of the two
+
+def calculate_follow_rate_GRIM(config, results, grim_trigger_player_name):
+    numerator, denominator = get_follow_params_GRIM(config, results, grim_trigger_player_name)
+    if denominator == 0: return None
+    return numerator/denominator
